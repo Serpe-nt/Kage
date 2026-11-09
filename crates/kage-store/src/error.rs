@@ -34,6 +34,13 @@ pub enum StoreError {
         /// The column.
         column: &'static str,
     },
+    /// The store's sessions carry no name of its own, so its sessions
+    /// cannot be told from another process's.
+    #[error("the store's sessions carry no name of its own")]
+    Unnamed,
+    /// The database did not answer within the time given.
+    #[error("the database did not answer within {0:?}")]
+    Unreachable(std::time::Duration),
 }
 
 impl From<sqlx::Error> for StoreError {

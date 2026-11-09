@@ -59,15 +59,30 @@ const POOL_TICK: Duration = Duration::from_secs(10);
 /// How often a server looks whether it still holds its database's lock.
 const LOCK_LOOK_EVERY: Duration = Duration::from_secs(15);
 
-/// How long a look at the lock may take before it confirms nothing.
+/// How long a look at the lock may take before it confirms nothing: the
+/// look on the lock's session, and taking it again on a new connection
+/// after a look that failed at once, share it.
 const LOCK_LOOK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a server serves without having confirmed its lock. Below the
 /// minute after which Postgres gives up a silent session and its lock
 /// (`kage_store::KEEPALIVES`: 30 s of silence, then three
 /// questions 10 s apart), counted from the last answer: the server stops
-/// before another one could take the lock (QA round three's lock-02).
+/// writing to the database before another one could take the lock (QA
+/// round three's lock-02, QA round four lock-01).
 const LOCK_UNCONFIRMED_LIMIT: Duration = Duration::from_secs(40);
+
+/// How long what runs may take to end once a server stopped for its lock:
+/// the pages are cut at once and every write fails at once, so it is
+/// quick; what is left after it is cut (QA round four lock-01).
+const FENCED_STOP_WITHIN: Duration = Duration::from_secs(10);
+
+/// How long the browsers may take to close after that.
+const FENCED_ENGINE_STOP_WITHIN: Duration = Duration::from_secs(5);
+
+/// How long a server that stopped for its lock tries to end its own
+/// sessions in the database on its way out (QA round four lock-02).
+const OWN_SESSIONS_WITHIN: Duration = Duration::from_secs(3);
 
 /// What a server that finds another one on its database is told.
 const ANOTHER_SERVER: &str = "another kage server is running on this database: it holds the \
@@ -182,16 +197,71 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         task.abort();
     }
     // After the manager's own work stopped: what waits is refused, the
-    // browsers are closed and the last byte counts are written.
+    // browsers are closed and the last byte counts are written. A fenced
+    // store writes none of them, and the browsers get a bound.
     if let Some((engine, _)) = started.engine {
-        engine.stop().await;
+        if store.fenced() {
+            if tokio::time::timeout(FENCED_ENGINE_STOP_WITHIN, engine.stop())
+                .await
+                .is_err()
+            {
+                tracing::warn!("the browsers had not closed in time; the server exits");
+            }
+        } else {
+            engine.stop().await;
+        }
     }
     retention.abort();
     recorder.abort();
     // Last: the lock goes with its connection.
     keeper.abort();
-    store.close().await;
-    served
+    ended(&store, served).await
+}
+
+/// What `serve` comes to once everything it started stopped: the store is
+/// closed, or, for a server that stopped for its database's lock, its
+/// sessions in the database are ended and the error says why it stopped.
+async fn ended(store: &Store, served: anyhow::Result<Option<LockLoss>>) -> anyhow::Result<()> {
+    let lost = match served {
+        Ok(lost) => lost,
+        Err(error) => {
+            if !store.fenced() {
+                store.close().await;
+            }
+            return Err(error);
+        }
+    };
+    let Some(lost) = lost else {
+        store.close().await;
+        return Ok(());
+    };
+    // The store is fenced: its pool would wait for connections a cut
+    // network holds. What this server still has in the database (the
+    // lock's session, a statement the network held up) is ended over a
+    // connection of its own when the database can be reached, so that the
+    // lock is free at once and nothing of this server's runs after it
+    // (QA round four lock-02).
+    let sessions = match store.end_own_sessions(OWN_SESSIONS_WITHIN).await {
+        Ok(ended) => {
+            tracing::info!(
+                sessions = ended,
+                "this server's sessions in the database were ended"
+            );
+            OwnSessions::Ended
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "this server's sessions in the database could not be ended: Postgres ends \
+                 them, and lets the lock go, about a minute after they last answered"
+            );
+            OwnSessions::Unreachable
+        }
+    };
+    match lost {
+        LockLoss::Taken => anyhow::bail!(ANOTHER_SERVER),
+        LockLoss::Unconfirmed { after } => Err(LockUnconfirmed { after, sessions }.into()),
+    }
 }
 
 /// The database's server lock as [`keep_the_lock`] looks at it.
@@ -200,8 +270,13 @@ trait HeldLock {
     /// holds it. An error when the session does not answer.
     fn held(&mut self) -> impl Future<Output = Result<bool, kage_store::StoreError>> + Send;
     /// Takes the lock again on a new connection, after the one that held
-    /// it was lost: false when another server holds it now.
+    /// it stopped answering or was lost: a session of this server's own
+    /// that still holds it is ended first. False when another server
+    /// holds it now.
     fn take_again(&mut self) -> impl Future<Output = Result<bool, kage_store::StoreError>> + Send;
+    /// Fences the server's store: nothing it writes reaches the database
+    /// from now on (QA round four lock-01).
+    fn fence(&self);
 }
 
 /// The lock a server holds, and the store it takes it again from.
@@ -216,13 +291,19 @@ impl HeldLock for StoreLock {
     }
 
     async fn take_again(&mut self) -> Result<bool, kage_store::StoreError> {
-        Ok(match ServerLock::take(self.store.pool()).await? {
-            Some(again) => {
-                self.lock = again;
-                true
-            }
-            None => false,
-        })
+        Ok(
+            match ServerLock::take_back(self.store.pool(), self.lock.pid()).await? {
+                Some(again) => {
+                    self.lock = again;
+                    true
+                }
+                None => false,
+            },
+        )
+    }
+
+    fn fence(&self) {
+        self.store.fence();
     }
 }
 
@@ -234,7 +315,11 @@ pub(crate) enum LockLoss {
     /// No look confirmed the lock for [`LOCK_UNCONFIRMED_LIMIT`]: the
     /// database could not be reached (a partition), and Postgres may give
     /// the lock to another server soon.
-    Unconfirmed,
+    Unconfirmed {
+        /// How long the lock had not been confirmed when the server
+        /// decided to stop.
+        after: Duration,
+    },
 }
 
 /// The exit code of a server that stopped because it could not confirm its
@@ -243,19 +328,54 @@ pub(crate) enum LockLoss {
 /// database can be reached. Every other failure of `serve` exits 1.
 pub(crate) const EXIT_LOCK_UNCONFIRMED: u8 = 75;
 
+/// What became of a stopped server's own sessions in the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnSessions {
+    /// They were ended on the way out: the lock is free.
+    Ended,
+    /// The database could not be reached on the way out.
+    Unreachable,
+}
+
 /// What a server that could not confirm its lock says as it exits.
 #[derive(Debug)]
-pub(crate) struct LockUnconfirmed;
+pub(crate) struct LockUnconfirmed {
+    /// Since the last confirmation, when the server decided to stop.
+    pub(crate) after: Duration,
+    /// What became of its sessions.
+    pub(crate) sessions: OwnSessions,
+}
 
 impl std::fmt::Display for LockUnconfirmed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.after.is_zero() {
+            f.write_str("this server could not confirm that it holds the database's server lock")?;
+        } else {
+            write!(
+                f,
+                "this server could not confirm for {} s that it holds the database's server \
+                 lock (the database could not be reached)",
+                self.after.as_secs()
+            )?;
+        }
+        f.write_str(
+            ". It stopped writing to the database at that moment, before Postgres lets the \
+             lock go (about a minute after the lock's session last answered), and the jobs it \
+             held are claimed again once their leases run out (ADR 0005). ",
+        )?;
+        match self.sessions {
+            OwnSessions::Ended => f.write_str(
+                "Its sessions in the database were ended on the way out: the lock is free now",
+            )?,
+            OwnSessions::Unreachable => f.write_str(
+                "The database could not be reached on the way out: until Postgres lets the \
+                 lock go, a server started is refused as if another one ran",
+            )?,
+        }
         write!(
             f,
-            "this server could not confirm for {} s that it holds the database's server lock \
-             (the database could not be reached): it stopped before Postgres could give the \
-             lock to another server (ADR 0005). Start it again once the database can be \
-             reached (exit code {EXIT_LOCK_UNCONFIRMED})",
-            LOCK_UNCONFIRMED_LIMIT.as_secs()
+            ". Start it again once the database can be reached (exit code \
+             {EXIT_LOCK_UNCONFIRMED})"
         )
     }
 }
@@ -263,80 +383,105 @@ impl std::fmt::Display for LockUnconfirmed {
 impl std::error::Error for LockUnconfirmed {}
 
 /// Looks every [`LOCK_LOOK_EVERY`] whether the server still holds its
-/// database's lock. A lock whose connection was lost (Postgres restarted,
-/// the network broke) is taken again; when another server took it in the
-/// meantime, `lost` says so (`Taken`) and this server stops. Aborting the
+/// database's lock. A lock whose session stopped answering or was lost
+/// (Postgres restarted, the network broke) is taken again on a new
+/// connection, after ending a session of this server's own that still
+/// holds it; when another server took it in the meantime, the store is
+/// fenced and `lost` says so (`Taken`): this server stops. Aborting the
 /// task drops the lock, and Postgres lets it go with its connection.
 ///
-/// A look, and a take after it, that does not answer within
-/// [`LOCK_LOOK_TIMEOUT`] confirms nothing. The server stops (`Unconfirmed`)
-/// only when a look made at or past [`LOCK_UNCONFIRMED_LIMIT`] since the
-/// last confirmation fails to confirm too: it always looks first, since a
-/// session that was silent for a while may answer again (a query the
-/// network held up holds the next one back until it is through). A server
-/// cut off for good stops at the first look at or past the limit, which
-/// ends 45 to 55 s after its last confirmation (a look every 15 s, 5 s for
-/// the look and 5 s for a take after it); Postgres gives a silent
-/// session's lock up about a minute after its last answer. Before, a look
-/// sent into a broken network waited until the network healed, and the
-/// server served on beside a second one that held the lock (QA round
-/// three's lock-02).
+/// Each look has its own deadline, [`LOCK_LOOK_TIMEOUT`], and confirms
+/// nothing when it does not answer within it. A look that confirmed
+/// nothing leaves the lock's connection behind what the network held up:
+/// the next look takes the lock again on a new connection instead of
+/// queueing behind it, so that the first look after a cut heals confirms
+/// the lock (QA round four lock-04). A look whose session answers at once
+/// that it does not hold the lock, or fails, takes it again within the
+/// same deadline.
+///
+/// The server stops (`Unconfirmed`) only when a look made at or past
+/// [`LOCK_UNCONFIRMED_LIMIT`] since the last confirmation fails to confirm
+/// too. A server cut off for good decides at the first look at or past the
+/// limit, which ends 45 to 50 s after its last confirmation (a look every
+/// 15 s, 5 s for each); Postgres gives a silent session's lock up about a
+/// minute after its last answer. The decision fences the store before
+/// anything else hears of it: from that instant no claim, lease, item,
+/// persona or session write of this server's leaves for the database (QA
+/// round four lock-01).
 async fn keep_the_lock(mut lock: impl HeldLock, lost: watch::Sender<Option<LockLoss>>) {
     let mut ticker = tokio::time::interval(LOCK_LOOK_EVERY);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     ticker.tick().await;
     let mut confirmed = tokio::time::Instant::now();
+    // Whether the lock's connection is behind a look that confirmed nothing.
+    let mut stuck = false;
     loop {
         ticker.tick().await;
-        match tokio::time::timeout(LOCK_LOOK_TIMEOUT, lock.held()).await {
-            Ok(Ok(true)) => {
-                confirmed = tokio::time::Instant::now();
-                kage_api::metrics::server_lock(true, Utc::now());
-                continue;
-            }
-            Ok(Ok(false) | Err(_)) => {
-                kage_api::metrics::server_lock(false, Utc::now());
-                match tokio::time::timeout(LOCK_LOOK_TIMEOUT, lock.take_again()).await {
-                    Ok(Ok(true)) => {
-                        tracing::warn!(
-                            "the database's server lock was lost with its connection and is held again"
-                        );
-                        confirmed = tokio::time::Instant::now();
-                        kage_api::metrics::server_lock(true, Utc::now());
-                        continue;
-                    }
-                    Ok(Ok(false)) => {
-                        tracing::error!(
-                            "another kage server took this database's lock while this server's \
-                             connection was lost: this server stops (ADR 0005)"
-                        );
-                        kage_api::metrics::server_lock(false, Utc::now());
-                        let _ = lost.send(Some(LockLoss::Taken));
-                        return;
-                    }
-                    Ok(Err(error)) => {
-                        tracing::warn!(%error, "the database's server lock cannot be looked at");
-                    }
-                    Err(_) => {
-                        tracing::warn!("the database's server lock cannot be taken again now");
-                    }
+        let deadline = tokio::time::Instant::now() + LOCK_LOOK_TIMEOUT;
+        let mut take = stuck;
+        if !stuck {
+            match tokio::time::timeout_at(deadline, lock.held()).await {
+                Ok(Ok(true)) => {
+                    confirmed = tokio::time::Instant::now();
+                    kage_api::metrics::server_lock(true, Utc::now());
+                    continue;
+                }
+                Ok(Ok(false)) => {
+                    tracing::warn!("the database's server lock is not held by its session");
+                    take = true;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "the database's server lock's session is gone");
+                    take = true;
+                }
+                Err(_) => {
+                    tracing::warn!("the database's server lock did not answer");
                 }
             }
-            Err(_) => {
-                tracing::warn!("the database's server lock did not answer");
+            kage_api::metrics::server_lock(false, Utc::now());
+        }
+        if take {
+            match tokio::time::timeout_at(deadline, lock.take_again()).await {
+                Ok(Ok(true)) => {
+                    tracing::warn!("the database's server lock is held again, on a new connection");
+                    stuck = false;
+                    confirmed = tokio::time::Instant::now();
+                    kage_api::metrics::server_lock(true, Utc::now());
+                    continue;
+                }
+                Ok(Ok(false)) => {
+                    lock.fence();
+                    tracing::error!(
+                        "another kage server took this database's lock while this server's \
+                         connection was lost: this server stopped writing to the database and \
+                         stops (ADR 0005)"
+                    );
+                    kage_api::metrics::server_lock(false, Utc::now());
+                    let _ = lost.send(Some(LockLoss::Taken));
+                    return;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "the database's server lock cannot be taken again now");
+                }
+                Err(_) => {
+                    tracing::warn!("the database's server lock cannot be taken again now");
+                }
             }
         }
-        // This look confirmed nothing.
+        // This look confirmed nothing: the next one goes by a new connection.
+        stuck = true;
         let unconfirmed = confirmed.elapsed();
         if unconfirmed >= LOCK_UNCONFIRMED_LIMIT {
+            lock.fence();
             tracing::error!(
                 unconfirmed_s = unconfirmed.as_secs(),
                 "this server could not confirm that it holds the database's server lock: \
-                 Postgres may give the lock to another server soon, so this server stops at \
-                 once and cuts the pages under way (ADR 0005)"
+                 Postgres may give the lock to another server soon, so this server stopped \
+                 writing to the database, stops at once and cuts the pages under way \
+                 (ADR 0005)"
             );
             kage_api::metrics::server_lock(false, Utc::now());
-            let _ = lost.send(Some(LockLoss::Unconfirmed));
+            let _ = lost.send(Some(LockLoss::Unconfirmed { after: unconfirmed }));
             return;
         }
         tracing::warn!(
@@ -346,7 +491,9 @@ async fn keep_the_lock(mut lock: impl HeldLock, lost: watch::Sender<Option<LockL
     }
 }
 
-/// Builds the API over what was started and serves it until a signal.
+/// Builds the API over what was started and serves it until a signal, or
+/// until the server stops for its database's lock: then `Some` says why.
+#[allow(clippy::too_many_lines)] // One shutdown, in its order, with the bound of a fenced stop.
 async fn serve_api(
     config: &Config,
     bind: Option<SocketAddr>,
@@ -355,7 +502,7 @@ async fn serve_api(
     policies: Arc<PolicyStore>,
     engine: Option<&(Engine, Arc<HealthChecker>)>,
     (metrics, lock_lost): (Option<MetricsHandle>, watch::Receiver<Option<LockLoss>>),
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<LockLoss>> {
     let state = ApiState::new(ApiParts {
         config: Arc::new(config.clone()),
         store: store.clone(),
@@ -434,7 +581,8 @@ async fn serve_api(
             for task in background {
                 let _ = task.await;
             }
-            return ended.context("the API server task failed")?;
+            ended.context("the API server task failed")??;
+            return Ok(None);
         }
     }
     // Readiness says so at once, and the listener stays to say it: a load
@@ -442,61 +590,85 @@ async fn serve_api(
     // scheduler grants nothing more from here on: what waited for a
     // persona is told `shutting_down`, a job's page is given back.
     let signalled = tokio::time::Instant::now();
-    // A server that may no longer hold the lock cuts the pages under way
-    // at once: what it would finish in `jobs.wind_down` could still run
-    // when Postgres gives the lock to another server, which claims the
-    // same items once their leases run out (lock-02).
+    // A server that may no longer hold the lock wrote its last to the
+    // database when its keeper decided so (the keeper fenced the store; a
+    // keeper that ended without a word is taken at its word here). It cuts
+    // the pages under way at once: what it would finish in
+    // `jobs.wind_down` could still run when Postgres gives the lock to
+    // another server, which claims the same items once their leases run
+    // out (lock-02, QA round four lock-01).
     if stopped_for.is_some() {
+        store.fence();
         state.stop_at_once();
     }
-    state.stop();
-    if let Some((engine, _)) = engine {
-        engine.quiesce();
-    }
-    let _ = stop.send(true);
-    tracing::info!(
-        "the server stops: /readyz answers 503 until the pages that are being read and the \
-         requests in flight have ended"
+    // Whatever runs on when a fenced stop runs out of time is cut.
+    let mut cut = vec![api.abort_handle(), upkeep.abort_handle()];
+    cut.extend(background.iter().map(tokio::task::JoinHandle::abort_handle));
+    cut.extend(
+        metrics_server
+            .iter()
+            .map(tokio::task::JoinHandle::abort_handle),
     );
-    // Before the engine stops: the worker waits for the pages that are
-    // being read (`jobs.wind_down`), writes down what it has to cut, and
-    // gives its jobs back; the sender its deliveries.
-    for task in background {
-        let _ = task.await;
+    let stopping = async {
+        state.stop();
+        if let Some((engine, _)) = engine {
+            engine.quiesce();
+        }
+        let _ = stop.send(true);
+        tracing::info!(
+            "the server stops: /readyz answers 503 until the pages that are being read and \
+             the requests in flight have ended"
+        );
+        // Before the engine stops: the worker waits for the pages that are
+        // being read (`jobs.wind_down`), writes down what it has to cut,
+        // and gives its jobs back; the sender its deliveries.
+        for task in background {
+            let _ = task.await;
+        }
+        // The requests with a key that are being answered, for at most
+        // `server.shutdown_grace` from the signal; then the listeners
+        // close, and what is still open gets that grace once more.
+        state
+            .settle(signalled + config.server.shutdown_grace.get())
+            .await;
+        let _ = close.send(true);
+        let served = api.await.context("the API server task failed")?;
+        if let Some(server) = metrics_server {
+            let _ = server.await;
+        }
+        upkeep.abort();
+        served
+    };
+    if stopped_for.is_none() {
+        stopping.await?;
+        return Ok(None);
     }
-    // The requests with a key that are being answered, for at most
-    // `server.shutdown_grace` from the signal; then the listeners close,
-    // and what is still open gets that grace once more.
-    state
-        .settle(signalled + config.server.shutdown_grace.get())
-        .await;
-    let _ = close.send(true);
-    let served = api.await.context("the API server task failed")?;
-    if let Some(server) = metrics_server {
-        let _ = server.await;
+    // A fenced server's work fails at its first write: what is left of it
+    // ends at once, and the server exits within a bound (lock-01).
+    if tokio::time::timeout(FENCED_STOP_WITHIN, stopping)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            within_s = FENCED_STOP_WITHIN.as_secs(),
+            "what ran when the server stopped for its lock had not ended in time: it is cut"
+        );
+        for handle in cut {
+            handle.abort();
+        }
     }
-    upkeep.abort();
-    ended_for_the_lock(stopped_for, served)
-}
-
-/// What `serve` comes to: why it stopped for its lock, when it did.
-fn ended_for_the_lock(
-    stopped_for: Option<LockLoss>,
-    served: anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    match stopped_for {
-        Some(LockLoss::Taken) => anyhow::bail!(ANOTHER_SERVER),
-        Some(LockLoss::Unconfirmed) => Err(LockUnconfirmed.into()),
-        None => served,
-    }
+    Ok(stopped_for)
 }
 
 /// Resolves with why the lock was lost, once the keeper says so; a keeper
 /// that ended without saying confirms nothing either.
 async fn lost_lock(mut told: watch::Receiver<Option<LockLoss>>) -> LockLoss {
+    let unknown = LockLoss::Unconfirmed {
+        after: Duration::ZERO,
+    };
     match told.wait_for(Option::is_some).await {
-        Ok(why) => why.unwrap_or(LockLoss::Unconfirmed),
-        Err(_) => LockLoss::Unconfirmed,
+        Ok(why) => why.unwrap_or(unknown),
+        Err(_) => unknown,
     }
 }
 
@@ -1001,127 +1173,233 @@ mod tests {
     }
 }
 
-/// The server lock's keeper (QA round three's lock-02), with locks that
-/// answer as a test says, on a clock the test moves.
+/// The server lock's keeper (QA round three's lock-02, QA round four
+/// lock-01 and lock-04), with locks that answer as a test says, on a clock
+/// the test moves.
 #[cfg(test)]
 mod lock_tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use kage_store::StoreError;
     use tokio::sync::watch;
 
-    use super::{HeldLock, LOCK_UNCONFIRMED_LIMIT, LockLoss, keep_the_lock, lost_lock};
+    use super::{
+        HeldLock, LOCK_UNCONFIRMED_LIMIT, LockLoss, LockUnconfirmed, OwnSessions, keep_the_lock,
+        lost_lock,
+    };
 
-    /// How a fake lock answers.
-    #[derive(Clone, Copy)]
+    /// How a fake lock answers one ask.
+    #[derive(Clone, Copy, Debug)]
     enum Answer {
-        /// It holds the lock.
+        /// It holds the lock (a look), or took it again (a take).
         Held,
-        /// Its session never answers: a network that drops every packet.
+        /// It never answers: a network that drops every packet.
         Silent,
-        /// Its connection is gone, and another server holds the lock.
+        /// The session is gone (a look), or another server holds the lock
+        /// (a take).
         Taken,
+        /// Its session answers that it does not hold the lock (a look).
+        NotHeld,
     }
 
-    /// A lock that answers each look as its script says, the last answer
-    /// for every look after the script.
+    /// What the keeper asked of the lock, in order.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Ask {
+        Look,
+        Take,
+        Fence,
+    }
+
+    /// A lock that answers each ask as its script says, the last answer
+    /// for every ask after the script.
     struct Fake {
         script: Vec<Answer>,
-        looks: Arc<AtomicU32>,
+        asks: Arc<Mutex<Vec<Ask>>>,
     }
 
     impl Fake {
-        fn answer(&self, look: u32) -> Answer {
-            let at = usize::try_from(look).unwrap();
+        fn ask(&self, ask: Ask) -> Answer {
+            let mut asks = self.asks.lock().unwrap();
+            let at = asks.iter().filter(|done| **done != Ask::Fence).count();
+            asks.push(ask);
             self.script[at.min(self.script.len() - 1)]
         }
     }
 
     impl HeldLock for Fake {
         async fn held(&mut self) -> Result<bool, StoreError> {
-            let look = self.looks.fetch_add(1, Ordering::SeqCst);
-            match self.answer(look) {
+            match self.ask(Ask::Look) {
                 Answer::Held => Ok(true),
+                Answer::NotHeld => Ok(false),
                 Answer::Silent => std::future::pending().await,
                 Answer::Taken => Err(StoreError::Database(sqlx::Error::PoolClosed)),
             }
         }
 
         async fn take_again(&mut self) -> Result<bool, StoreError> {
-            let look = self.looks.load(Ordering::SeqCst).saturating_sub(1);
-            match self.answer(look) {
+            match self.ask(Ask::Take) {
                 Answer::Held => Ok(true),
                 Answer::Silent => std::future::pending().await,
-                Answer::Taken => Ok(false),
+                Answer::Taken | Answer::NotHeld => Ok(false),
             }
+        }
+
+        fn fence(&self) {
+            self.asks.lock().unwrap().push(Ask::Fence);
         }
     }
 
-    /// Runs a keeper for `for_` and says when it said the lock was lost and
-    /// why, and how many looks it made.
-    async fn kept(script: &[Answer], for_: Duration) -> (Option<(Duration, LockLoss)>, u32) {
-        let looks = Arc::new(AtomicU32::new(0));
+    /// What a keeper did in a run.
+    struct Kept {
+        /// When it said the lock was lost and why, and what it had asked
+        /// by then.
+        lost: Option<(Duration, LockLoss, Vec<Ask>)>,
+        asks: Vec<Ask>,
+    }
+
+    /// Runs a keeper for `for_`.
+    async fn kept(script: &[Answer], for_: Duration) -> Kept {
+        let asks = Arc::new(Mutex::new(Vec::new()));
         let (lost, told) = watch::channel(None);
         let started = tokio::time::Instant::now();
         let keeper = tokio::spawn(keep_the_lock(
             Fake {
                 script: script.to_vec(),
-                looks: Arc::clone(&looks),
+                asks: Arc::clone(&asks),
             },
             lost,
         ));
-        let when = tokio::time::timeout(for_, lost_lock(told))
+        let lost = tokio::time::timeout(for_, lost_lock(told))
             .await
             .ok()
-            .map(|loss| (started.elapsed(), loss));
+            .map(|loss| (started.elapsed(), loss, asks.lock().unwrap().clone()));
         keeper.abort();
-        (when, looks.load(Ordering::SeqCst))
+        let asks = asks.lock().unwrap().clone();
+        Kept { lost, asks }
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_lock_that_answers_is_kept() {
-        let (lost, looks) = kept(&[Answer::Held], Duration::from_mins(10)).await;
-        assert!(lost.is_none(), "{lost:?}");
-        assert!(looks >= 39, "{looks}");
+        let kept = kept(&[Answer::Held], Duration::from_mins(10)).await;
+        assert!(kept.lost.is_none());
+        assert!(kept.asks.len() >= 39, "{:?}", kept.asks);
+        assert!(kept.asks.iter().all(|ask| *ask == Ask::Look));
     }
 
-    /// A session cut off by the network never answers: the server stops,
-    /// saying it could not confirm the lock, at the first look at or past
-    /// the limit that fails too, before Postgres gives the lock up (a
-    /// minute after the last answer).
+    /// A session cut off by the network never answers: the server decides
+    /// to stop, saying it could not confirm the lock, at the first look at
+    /// or past the limit that fails too, before Postgres gives the lock up
+    /// (a minute after the last answer). The store is fenced before the
+    /// server hears of it (QA round four lock-01).
     #[tokio::test(start_paused = true)]
-    async fn a_lock_that_cannot_be_confirmed_stops_the_server_before_postgres_lets_it_go() {
-        let (lost, looks) = kept(&[Answer::Silent], Duration::from_mins(10)).await;
-        let (after, why) = lost.unwrap();
-        assert_eq!(why, LockLoss::Unconfirmed);
+    async fn a_lock_that_cannot_be_confirmed_fences_the_store_and_stops_the_server_in_time() {
+        let kept = kept(&[Answer::Silent], Duration::from_mins(10)).await;
+        let (after, why, asks) = kept.lost.unwrap();
+        assert_eq!(
+            why,
+            LockLoss::Unconfirmed {
+                after: Duration::from_secs(50)
+            }
+        );
         assert!(after >= LOCK_UNCONFIRMED_LIMIT, "{after:?}");
-        assert!(after <= Duration::from_secs(55), "{after:?}");
-        // It looked at 15, 30 and 45 s, and stopped when the last one
-        // failed too.
-        assert_eq!(looks, 3);
+        assert!(after <= Duration::from_secs(50), "{after:?}");
+        // A look at 15 s that timed out, then the lock taken again on a
+        // new connection at 30 and 45 s, never queued behind the look; the
+        // fence came before the word.
+        assert_eq!(asks, [Ask::Look, Ask::Take, Ask::Take, Ask::Fence]);
     }
 
-    /// The planner's review of lock-02: two looks that do not answer (a
-    /// network that held a query up holds the next one back), then one
-    /// that does. The look at or past the limit is made, confirms the
-    /// lock, and the server keeps it; before, it stopped at the third tick
-    /// without looking.
+    /// QA round four lock-04: a 28 s cut over one look. The look into the
+    /// cut and the next take time out; once the cut heals, the next look
+    /// takes the lock again on a new connection (its own session, held up
+    /// behind the look the network kept, is ended there) and confirms it.
+    /// Before, the looks after the heal queued behind the one sent into
+    /// the cut, and the server stopped 7.7 s after the heal.
     #[tokio::test(start_paused = true)]
-    async fn a_lock_silent_for_two_looks_that_then_answers_is_kept() {
-        let (lost, looks) = kept(
-            &[Answer::Silent, Answer::Silent, Answer::Held],
+    async fn a_short_cut_over_one_look_keeps_the_lock_once_it_heals() {
+        let kept = kept(
+            &[Answer::Silent, Answer::Silent, Answer::Held, Answer::Held],
             Duration::from_mins(10),
         )
         .await;
-        assert!(lost.is_none(), "{lost:?}");
-        assert!(looks >= 39, "{looks}");
+        assert!(kept.lost.is_none(), "{:?}", kept.lost.map(|lost| lost.1));
+        assert_eq!(
+            &kept.asks[..4],
+            [Ask::Look, Ask::Take, Ask::Take, Ask::Look]
+        );
+        assert!(!kept.asks.contains(&Ask::Fence));
+    }
+
+    /// A session that answers it does not hold the lock, or is gone, is
+    /// replaced within the same look.
+    #[tokio::test(start_paused = true)]
+    async fn a_lock_whose_session_lost_it_is_taken_again_within_the_look() {
+        for first in [Answer::NotHeld, Answer::Taken] {
+            let kept = kept(&[first, Answer::Held], Duration::from_mins(2)).await;
+            assert!(kept.lost.is_none(), "{first:?}");
+            assert_eq!(
+                &kept.asks[..3],
+                [Ask::Look, Ask::Take, Ask::Look],
+                "{first:?}"
+            );
+        }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_lock_another_server_took_stops_the_server_at_the_next_look() {
-        let (lost, _) = kept(&[Answer::Taken], Duration::from_mins(10)).await;
-        assert_eq!(lost, Some((Duration::from_secs(15), LockLoss::Taken)));
+    async fn a_lock_another_server_took_fences_the_store_and_stops_the_server_at_the_next_look() {
+        let kept = kept(&[Answer::Taken], Duration::from_mins(10)).await;
+        let (after, why, asks) = kept.lost.unwrap();
+        assert_eq!((after, why), (Duration::from_secs(15), LockLoss::Taken));
+        assert_eq!(asks, [Ask::Look, Ask::Take, Ask::Fence]);
+    }
+
+    /// A keeper that ended without a word confirms nothing either.
+    #[tokio::test]
+    async fn a_keeper_that_ended_without_a_word_is_a_lock_not_confirmed() {
+        let (lost, told) = watch::channel(None);
+        drop(lost);
+        assert_eq!(
+            lost_lock(told).await,
+            LockLoss::Unconfirmed {
+                after: Duration::ZERO
+            }
+        );
+    }
+
+    /// The exit message says what happened, and only that (QA round four
+    /// lock-01): when the server stopped writing, and what became of its
+    /// sessions.
+    #[test]
+    fn the_exit_message_says_when_the_server_stopped_writing_and_whether_the_lock_is_free() {
+        let ended = LockUnconfirmed {
+            after: Duration::from_secs(50),
+            sessions: OwnSessions::Ended,
+        }
+        .to_string();
+        assert!(
+            ended.starts_with("this server could not confirm for 50 s"),
+            "{ended}"
+        );
+        assert!(
+            ended.contains("stopped writing to the database at that moment"),
+            "{ended}"
+        );
+        assert!(ended.contains("the lock is free now"), "{ended}");
+        assert!(!ended.contains("before Postgres could give"), "{ended}");
+        let unreachable = LockUnconfirmed {
+            after: Duration::ZERO,
+            sessions: OwnSessions::Unreachable,
+        }
+        .to_string();
+        assert!(
+            unreachable.starts_with("this server could not confirm that it holds"),
+            "{unreachable}"
+        );
+        assert!(
+            unreachable.contains("refused as if another one ran"),
+            "{unreachable}"
+        );
+        assert!(unreachable.ends_with("(exit code 75)"), "{unreachable}");
     }
 }

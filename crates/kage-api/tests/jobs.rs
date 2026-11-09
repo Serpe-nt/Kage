@@ -1475,6 +1475,177 @@ async fn a_server_that_may_have_lost_its_lock_cuts_the_page_under_way_at_once() 
     api.shut_down().await;
 }
 
+/// The rows a job and its items have in the database, asked over a pool of
+/// the test's own: the server's store may be fenced.
+async fn job_rows(url: &str) -> Vec<String> {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url)
+        .await
+        .unwrap();
+    let mut rows: Vec<String> = sqlx::query_scalar(
+        "SELECT concat_ws(' ', 'job', id, state, worker, lease_until, items_failed, \
+                items_succeeded, finished_at) FROM jobs",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let items: Vec<String> = sqlx::query_scalar(
+        "SELECT concat_ws(' ', 'item', id, state, error, claims, not_before, finished_at) \
+         FROM job_items",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    rows.extend(items);
+    rows.sort();
+    pool.close().await;
+    rows
+}
+
+/// QA round four lock-01: the database failed while what a page came to
+/// was being written (a cut between the server and Postgres, here an
+/// `attempts` insert that the database refuses). That is never the page's
+/// failure: the item waits to be read again, and its job does not end.
+/// Before, the item was written `failed` with the error `internal`, and its
+/// job ended `failed`, though the site had been asked for the page.
+#[tokio::test]
+async fn a_page_whose_attempt_could_not_be_written_waits_and_is_not_failed() {
+    let mut api = Api::start_with(2, 149, FAST, quick).await;
+    pages(&api, "/cut", page("A page")).await;
+    let token = api.key(&[Scope::Jobs]).await;
+    let pool = api.lab.db.store.pool();
+    for statement in [
+        "CREATE FUNCTION refuse_attempts() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN RAISE EXCEPTION 'the database is cut off'; END $$",
+        "CREATE TRIGGER refuse_attempts BEFORE INSERT ON attempts \
+         FOR EACH ROW EXECUTE FUNCTION refuse_attempts()",
+    ] {
+        sqlx::query(statement).execute(pool).await.unwrap();
+    }
+    let work = api.work();
+    let reply = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({ "type": "batch", "urls": [Api::url("/cut/1")], "defaults": { "level": 1 } }),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+
+    // The site is asked; what it answered cannot be written.
+    let mut asked = 0;
+    for _ in 0..100 {
+        asked = api.lab.site.received_requests().await.unwrap().len();
+        if asked > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(asked > 0, "the site was never asked");
+    let items = loop {
+        let items = api.job_items(&token, &id).await;
+        if items[0]["state"] != "running" {
+            break items;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(items[0]["state"], "queued", "{items:?}");
+    assert_ne!(items[0]["error"], "internal", "{items:?}");
+    let job = api.get(&token, &format!("/v1/jobs/{id}")).await.json();
+    assert!(
+        job["state"] == "running" || job["state"] == "paused",
+        "{job:?}"
+    );
+    assert_eq!(job["items"]["failed"], 0, "{job:?}");
+    work.stop().await;
+    api.shut_down().await;
+}
+
+/// QA round four lock-01: a server that may have lost its database's lock
+/// fences its store when it decides so. From that instant it writes
+/// nothing: the page it was reading is cut and not written, its job is
+/// neither ended nor given back (it is claimed again once its lease ran
+/// out), and the job queued behind it is not claimed. Before, the server
+/// went on writing until it exited, 8 to 60 s later: items `failed
+/// internal`, jobs `failed`, and a claim, after another server had taken
+/// the lock.
+#[tokio::test]
+async fn a_fenced_server_writes_nothing_more_and_claims_nothing() {
+    let mut api = Api::start_with(2, 149, FAST, |config| {
+        quick(config);
+        config.jobs.max_running = 1;
+    })
+    .await;
+    pages(
+        &api,
+        "/fenced",
+        page("Slow").set_delay(Duration::from_secs(3)),
+    )
+    .await;
+    let token = api.key(&[Scope::Jobs]).await;
+    let work = api.work();
+    for number in 1..=2 {
+        let reply = api
+            .post(
+                &token,
+                "/v1/jobs",
+                &json!({
+                    "type": "batch",
+                    "urls": [Api::url(&format!("/fenced/{number}"))],
+                    "defaults": { "level": 1 },
+                }),
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
+    }
+    // The first job's page is being read; the second waits behind it.
+    for _ in 0..100 {
+        if !api.lab.site.received_requests().await.unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let url = api.lab.db.url.clone();
+    let before = job_rows(&url).await;
+    assert!(
+        before.iter().any(|row| row.contains(" running ")),
+        "{before:?}"
+    );
+
+    let fenced = std::time::Instant::now();
+    api.parts.store.fence();
+    api.state.stop_at_once();
+    work.stop().await;
+    assert!(
+        fenced.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        fenced.elapsed()
+    );
+    // Past the moment the site answers the cut page, and past the job's
+    // lease: nothing of this server's was written meanwhile.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(job_rows(&url).await, before);
+    assert_eq!(count_at(&url, "attempts").await, 0);
+    api.shut_down().await;
+}
+
+/// How many rows `table` holds, asked over a pool of the test's own.
+async fn count_at(url: &str, table: &str) -> i64 {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url)
+        .await
+        .unwrap();
+    let count = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    count
+}
+
 #[tokio::test]
 async fn a_job_waits_where_it_must_and_ends_when_it_may_wait_no_longer() {
     let mut api = Api::start_with(2, 149, FAST, quick).await;

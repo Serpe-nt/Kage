@@ -705,6 +705,40 @@ async fn metrics_expose_the_series_of_the_specification() {
         assert_eq!(reply.status, StatusCode::NOT_FOUND, "{at}");
     }
 
+    // QA round four lock-03: a database that does not answer (a cut, here
+    // a table it holds locked) holds up no scrape of the listener: the
+    // series the server keeps itself, its lock's among them, are served
+    // after a bounded wait, and those read from the database are left out.
+    kage_api::metrics::server_lock(true, chrono::Utc::now());
+    let holder = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&api.lab.db.url)
+        .await
+        .unwrap();
+    let mut held = holder.begin().await.unwrap();
+    sqlx::query("LOCK TABLE personas IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let asked = std::time::Instant::now();
+    let cut = ask(&private, request(Method::GET, "/metrics", None, None)).await;
+    assert!(
+        asked.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(cut.status, StatusCode::OK);
+    let cut_text = String::from_utf8(cut.body.to_vec()).unwrap();
+    expect(&cut_text, "kage_server_lock_held", &[]);
+    expect(
+        &cut_text,
+        "kage_server_lock_confirmed_timestamp_seconds",
+        &[],
+    );
+    assert!(!cut_text.contains("kage_persona_state"), "{cut_text}");
+    held.rollback().await.unwrap();
+    holder.close().await;
+
     // F128 (sched-03): clients that hang up on a fetch bring the gauge of
     // the requests in flight back down. It rose by one for every one of
     // them, for the life of the process.

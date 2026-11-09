@@ -739,6 +739,44 @@ version's date is the day, in UTC, its tag was made.
   the persona had typed before. Lending keys now announces a new keyboard
   to the display's clients (XKB's `NewKeyboardNotify`), and Chrome reads
   the key map again before the first lent key is pressed.
+- **A server that may have lost its database's lock writes nothing more,
+  and a cut never fails a page (QA round four lock-01).** When a cut
+  between a server and Postgres healed, the job items under way were
+  written `failed` with the error `internal` (no attempt recorded, though
+  the site had been asked) and their jobs ended `failed`: by a server
+  that had decided to stop for its lock, after a second server had taken
+  the lock and started the same items again, or without any stop at all.
+  The stopping server went on for 8 to 60 s: it claimed jobs, renewed
+  leases, and wrote personas and sessions after the other server held the
+  lock. Now a page whose outcome cannot be written for the database waits
+  (`store`), for its worker or whoever claims the job next. The moment a
+  server decides to stop for its lock it fences its store: the pool is
+  closed, and no claim, lease, item, job, persona or session write leaves
+  it from then on; it exits within 20 s. Its exit message says when it
+  stopped writing, not that it stopped before another server could take
+  the lock.
+- **A stopped server's own session no longer refuses the next one (QA
+  round four lock-02).** After a stop for the lock whose cut then healed,
+  the restarted server was refused five or six times, for 10 to 16 s, as
+  "another kage server is running", by the stopped process's own lock
+  session. A server that stops for its lock now ends its own sessions in
+  the database on its way out (`application_name` `kage <id>`) when the
+  database can be reached, and says whether it could.
+- **A short cut no longer stops the server (QA round four lock-04).** A
+  28 s cut over one look stopped the server 7.7 s after the network
+  healed, its own session still holding the lock: the looks after the
+  heal queued behind the one the cut held up. A look that confirmed
+  nothing now has the next one take the lock again on a new connection,
+  ending the server's own stuck session; a cut that heals within 30 s
+  never stops a server.
+- **The lock's series are scraped during a cut, and their alert can fire
+  (QA round four lock-03).** The runbooks and spec §20 still said that a
+  look into a cut hangs while the server serves on, and proposed an alert
+  at an age above 60 s, which could never fire: the server stops at 45 to
+  50 s, and no scrape carried the series during a cut. The metrics
+  listener now leaves out what it reads from the database after 2 s and
+  serves the rest, and `KageServerLockUnconfirmed` (age above 35 s) ships
+  in the alert rules.
 
 ### Changed
 

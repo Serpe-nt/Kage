@@ -24,6 +24,28 @@ tests:
               summary: Prometheus cannot scrape kage
               runbook: docs/runbooks/observability.md
 
+  - name: the server cannot confirm its database's lock
+    interval: 15s
+    input_series:
+      # A healthy server confirms its lock every 15 s; the other was cut
+      # off from its database after 60 s, and its metrics listener goes on
+      # serving the last confirmation.
+      - series: 'kage_server_lock_confirmed_timestamp_seconds{job="kage",instance="healthy:9464"}'
+        values: '0+15x12'
+      - series: 'kage_server_lock_confirmed_timestamp_seconds{job="kage",instance="cut:9464"}'
+        values: '0 15 30 45 60 60 60 60 60 60'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KageServerLockUnconfirmed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: KageServerLockUnconfirmed
+        exp_alerts:
+          - exp_labels: { severity: critical, job: kage, instance: "cut:9464" }
+            exp_annotations:
+              summary: kage has not confirmed its database's lock for over 35 s; cut off from its database, it stops by itself
+              runbook: docs/runbooks/observability.md
+
   - name: no proxy can be used
     interval: 1m
     input_series:
