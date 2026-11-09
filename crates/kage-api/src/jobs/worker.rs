@@ -328,18 +328,30 @@ fn store_failed() -> ItemEnd {
     }
 }
 
-/// Whether a fetch failed on the database: the store, or the store under
-/// the persona manager or the proxy pool. Such a failure says nothing
-/// about the page (QA round four lock-01).
+/// Whether a fetch failed because the database could not be reached: the
+/// store, or the store under the persona manager or the proxy pool, lost
+/// its connection or had none to give (a cut, a fenced store). Such a
+/// failure says nothing about the page (QA round four lock-01). A
+/// statement the database refused for what it is (a constraint, a value it
+/// cannot take, a trigger's error) fails the same way every time: that is
+/// the item's failure, not a wait (review of #98).
 fn the_stores(error: &SchedulerError) -> bool {
-    matches!(
-        error,
-        SchedulerError::Store(_)
-            | SchedulerError::Pool(PoolError::Store(_))
-            | SchedulerError::Persona(
-                PersonaError::Store(_) | PersonaError::Pool(PoolError::Store(_))
-            )
-    )
+    match error {
+        SchedulerError::Store(store)
+        | SchedulerError::Pool(PoolError::Store(store))
+        | SchedulerError::Persona(
+            PersonaError::Store(store) | PersonaError::Pool(PoolError::Store(store)),
+        ) => store.is_connection(),
+        _ => false,
+    }
+}
+
+/// An item that cannot be run: something inside Kage failed.
+fn internal() -> ItemEnd {
+    ItemEnd::Failed {
+        error: "internal".to_owned(),
+        outcome: None,
+    }
 }
 
 fn later(now: DateTime<Utc>, wait: Duration) -> DateTime<Utc> {
@@ -453,7 +465,13 @@ impl Work {
             .sessions()
             .resolve(self.key.id, session)
             .await
-            .map_err(|_| store_failed())?;
+            .map_err(|error| {
+                if error.is_connection() {
+                    store_failed()
+                } else {
+                    internal()
+                }
+            })?;
         let Some(found) = found else {
             return Err(failed(ErrorCode::SessionNotFound));
         };
@@ -505,6 +523,8 @@ impl Work {
     async fn spend_page(&self) -> Result<(), ItemEnd> {
         let store = self.state.store().clone();
         let key = self.key.id;
+        let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lost = Arc::clone(&cut);
         let spent = self
             .state
             .limits()
@@ -513,7 +533,10 @@ impl Work {
                     .requests()
                     .count_for_key_since(key, since)
                     .await
-                    .map_err(|error| crate::error::ApiError::internal(&error))
+                    .map_err(|error| {
+                        lost.store(error.is_connection(), std::sync::atomic::Ordering::Relaxed);
+                        crate::error::ApiError::internal(&error)
+                    })
             })
             .await;
         match spent {
@@ -530,9 +553,10 @@ impl Work {
                     until: tomorrow,
                 })
             }
-            // The key's pages of the day could not be counted: the
-            // database's failure, not the item's.
-            Err(_) => Err(store_failed()),
+            // The key's pages of the day could not be counted because the
+            // database could not be reached: not the item's failure.
+            Err(_) if cut.load(std::sync::atomic::Ordering::Relaxed) => Err(store_failed()),
+            Err(_) => Err(internal()),
         }
     }
 

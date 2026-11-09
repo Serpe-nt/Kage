@@ -15,18 +15,22 @@ groups:
           runbook: docs/runbooks/observability.md
 
       # The server's database lock (ADR 0005, spec §16.6): confirmed every
-      # 15 s, so its age reaches about 30 s on a healthy server just before a
-      # scrape. A server cut off from its database stops writing and stops
-      # by itself 45 to 50 s after its last confirmation; the metrics
-      # listener serves the series until then, whatever the database does
-      # (QA round four lock-03), so the alert fires in between, and KageDown
-      # takes over once the server is gone.
+      # 15 s (a look takes up to 5 s), so at a scrape the last confirmation
+      # is at most about 20 s old on a healthy server. A server cut off from
+      # its database stops writing and stops by itself 45 to 50 s after its
+      # last confirmation; the metrics listener serves the series until
+      # then, whatever the database does (QA round four lock-03). The age is
+      # taken at the scrape (timestamp() of the sample), not at the rule's
+      # evaluation, so a slow scrape or evaluation never makes a healthy
+      # server's age look large; a scrape interval of 15 s (this profile's)
+      # always lands a scrape in the window between 30 s and the stop, a
+      # longer one may miss it. KageDown takes over once the server is gone.
       - alert: KageServerLockUnconfirmed
-        expr: time() - kage_server_lock_confirmed_timestamp_seconds > 35
+        expr: timestamp(kage_server_lock_confirmed_timestamp_seconds) - kage_server_lock_confirmed_timestamp_seconds > 30
         labels:
           severity: critical
         annotations:
-          summary: kage has not confirmed its database's lock for over 35 s; cut off from its database, it stops by itself
+          summary: kage had not confirmed its database's lock for over 30 s when it was scraped; cut off from its database, it stops by itself
           runbook: docs/runbooks/observability.md
 
       # A proxy is usable while it is healthy or degraded; without one,

@@ -131,7 +131,7 @@ them sent somewhere, point an Alertmanager of your own at Prometheus.
 | Alert | When | What to do |
 |---|---|---|
 | KageDown (critical) | Prometheus has not scraped Kage for 2 minutes | `docker compose --file deploy/compose.yaml ps`, `docker compose --file deploy/compose.yaml logs kage` |
-| KageServerLockUnconfirmed (critical) | the server has not confirmed its database's lock for over 35 s (healthy: under about 30 s): it is cut off from Postgres, stops writing 45 to 50 s after its last confirmation and exits with code 75 (see Metrics) | check the network between Kage and Postgres; Compose starts the server again, and it serves once it holds the lock ([first-start.md](first-start.md)) |
+| KageServerLockUnconfirmed (critical) | at a scrape, the server had not confirmed its database's lock for over 30 s (healthy: at most about 20 s); it needs a scrape interval of 15 s or less to land in the window before the stop: it is cut off from Postgres, stops writing 45 to 50 s after its last confirmation and exits with code 75 (see Metrics) | check the network between Kage and Postgres; Compose starts the server again, and it serves once it holds the lock ([first-start.md](first-start.md)) |
 | KagePoolUnavailable (critical) | no proxy healthy or degraded for 10 minutes; a proxy whose backoff ran out counts as `backoff` until a probe passes, so an outage holds the alert through every expiry, and so does one whose latest probe failed while the outage guard of a pool of four or more holds (F151); under `egress.mode: direct` the pool is idle and publishes nothing, so it stays quiet | [proxies.md](proxies.md) |
 | KageBandwidthBudget (warning) | 80 % of the month's cap used | [fetching.md](fetching.md#the-bandwidth-budget) |
 | KageBreakerOpen (warning) | a domain is paused: `kage_breaker_open` is read from the stored breakers at every scrape, so it holds across a restart and ends with the pause, not with the trial that closes the breaker (F126) | [block-report.md](block-report.md) |
@@ -192,7 +192,7 @@ when it last saw it held. The look that confirms it runs every 15 s and
 gives up after 5 s. Cut the server off from its database (a partition)
 and `kage_server_lock_held` drops to 0 at the first look, while the age,
 `time() - kage_server_lock_confirmed_timestamp_seconds` (under about 30 s
-on a healthy server), grows: past 35 s `KageServerLockUnconfirmed` fires.
+on a healthy server), grows: past 30 s at a scrape `KageServerLockUnconfirmed` fires.
 At 45 to 50 s the server stops writing to the database and stops by
 itself with exit code 75, before Postgres could give the lock to another
 server; then `KageDown` takes over. The metrics listener this profile

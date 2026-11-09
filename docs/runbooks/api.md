@@ -1037,7 +1037,7 @@ is when it last did. Scrape them from the metrics listener
 up the key and answers `500`, while the listener serves the series the
 server keeps itself whatever the database does. The age, `time() -
 kage_server_lock_confirmed_timestamp_seconds`, stays under about 30 s on a
-healthy server; past 35 s the server is cut off from its database
+healthy server (at most about 20 s at a scrape); past 30 s at a scrape the server is cut off from its database
 (`KageServerLockUnconfirmed`), and it stops writing and stops by itself
 45 to 50 s after its last confirmation, before Postgres could give the
 lock to another server (spec §16.6).

@@ -3230,28 +3230,37 @@ lock). A server decides to stop when a look made 40 s or more after its
 last confirmation fails to confirm too, which is 45 to 50 s after that
 confirmation; it always looks first, since a session that was silent for
 a while may answer again. At that instant it fences its store: the pool
-is closed, so no claim, lease renewal, item, job, persona or session
-write of the server's leaves for the database from then on, and its
-runners take their jobs as no longer theirs. It then cuts the pages
-under way at once (`interrupted`; no `jobs.wind_down`; nothing of them
-is written), and exits with code 75, since no other server was seen,
-within 20 s of its decision (10 s for what runs to end, 5 s for the
-browsers, 3 s for its sessions, 2 s for its last traces). Postgres gives a silent session's lock
-up about a minute after its last answer, so the server has stopped
-writing before another could take the lock, and the jobs it held are
-claimed again once their leases run out (QA round three's lock-02; QA
-round four lock-01: a server went on writing for 8 to 60 s after its
-decision, its items `failed` `internal`, its jobs `failed`, and a claim
-and persona writes after a second server had taken the lock). On its
-way out it ends its own sessions in the database (their
-`application_name` is `kage <id>`, an id of the process's own) over a
-new connection when the database can be reached: the lock is free at
-once, and a statement a cut network held up does not run after it (QA
-round four lock-02: the next server was refused five or six times as if
-another ran). What a page came to that cannot be written for the
-database (a cut, a fenced store) is never the page's failure: the item
-waits (`store`) for its worker, or for whoever claims the job next (QA
-round four lock-01). A job whose worker stopped is claimed again when
+is closed, so no new statement of the server's leaves for the database
+from then on (no claim, lease renewal, item, job, persona or session
+write), and its runners take their jobs as no longer theirs. A statement
+or transaction already under way on a connection in use when the fence
+came is not called back by it, and may still commit: the server ends its
+own sessions in the database (their `application_name` is `kage <id>`,
+an id of the process's own) over a new connection as soon as the
+database answers, which rolls back what was under way, at once when
+another server took the lock, and keeps trying every second while the
+database cannot be reached. It then cuts the pages under way at once
+(`interrupted`; no `jobs.wind_down`; nothing of them is written), and
+exits, with code 75 when no other server was seen, within 20 s of its
+decision (10 s for what runs to end, 5 s for the browsers, 3 s for its
+sessions, 2 s for its last traces). Postgres gives a silent session's
+lock up about a minute after its last answer, and every session of the
+server keeps the same short keepalives, so the server has stopped
+sending new writes before another could take the lock, and Postgres ends
+whatever of it still lives no later than it lets the lock go; the jobs it
+held are claimed again once their leases run out (QA round three's
+lock-02; QA round four lock-01: a server went on writing for 8 to 60 s
+after its decision, its items `failed` `internal`, its jobs `failed`,
+and a claim and persona writes after a second server had taken the
+lock). On its way out it ends its sessions once more when the database
+can be reached, and says whether it could: the lock is then free at once
+(QA round four lock-02: the next server was refused five or six times as
+if another ran). What a page came to that cannot be written because the
+database cannot be reached (a cut, a fenced store) is never the page's
+failure: the item waits (`store`) for its worker, or for whoever claims
+the job next; a statement the database refuses for what it is (a
+constraint, a value it cannot take) fails the item as before (QA round
+four lock-01, review of #98). A job whose worker stopped is claimed again when
 its lease ran out, by the server started after it, and goes on where its
 items stand: Postgres lets the lock go with the session of a server that
 was killed, so the next one starts at once. The persona's context may
@@ -3901,7 +3910,7 @@ are gzip-compressed on disk.
   cannot be looked up), while the metrics listener (`server.metrics_bind`)
   serves the series the server keeps itself whatever the database does,
   and leaves out those it reads from the database after 2 s: the age of
-  the timestamp grows past 35 s before the server stops at 45 to 50 s,
+  the timestamp, taken at the scrape, grows past 30 s before the server stops at 45 to 50 s,
   and `KageServerLockUnconfirmed` fires (lock-02; QA round four lock-03).
   Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
   waits and what is being worked) and `kage_webhook_deliveries_pending`,

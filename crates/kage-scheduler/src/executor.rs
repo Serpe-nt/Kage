@@ -78,7 +78,8 @@ use kage_core::schedule::politeness::Courtesy;
 use kage_core::seed::Seed;
 use kage_core::ssrf::{SsrfDenial, SsrfPolicy, check_url};
 use kage_http::{
-    FetchSpec, Fetched, Guard, HopExits, HttpError, PlainClient, PlainSpec, RequestKind,
+    CookieBackendError, FetchSpec, Fetched, Guard, HopExits, HttpError, PlainClient, PlainSpec,
+    RequestKind,
 };
 use kage_persona::identity::http_spec;
 use kage_persona::{PersonaError, PersonaManager, Via};
@@ -1466,6 +1467,12 @@ where
 /// nothing (QA round three, lock-01).
 pub const CONTEXT_CONFLICT: &str = "context_conflict";
 
+/// The reason of an attempt whose persona's cookie jar could not be read
+/// because the database could not be reached (a cut, a fenced store):
+/// nothing was asked of the site, and the pipeline counts it against
+/// nothing, as it counts [`CONTEXT_BUSY`] (review of #98).
+pub const STORE_UNAVAILABLE: &str = "store_unavailable";
+
 /// How a failure of the persona's own plumbing is named.
 fn plumbing(error: &PersonaError) -> (&'static str, bool) {
     match error {
@@ -1909,6 +1916,13 @@ impl PathExecutor {
                 "hop_exit_unavailable",
                 Courtesy::NotTheSite,
             ),
+            HttpError::Cookies(CookieBackendError::Store(store)) if store.is_connection() => {
+                AttemptOutput::failed(
+                    Outcome::ProviderError,
+                    STORE_UNAVAILABLE,
+                    Courtesy::NotTheSite,
+                )
+            }
             HttpError::Profile(_) | HttpError::Build(_) | HttpError::Cookies(_) => {
                 AttemptOutput::failed(Outcome::ProviderError, "http_client", Courtesy::NotTheSite)
             }
@@ -3663,6 +3677,23 @@ mod tests {
                 "error:the TLS handshake with the target failed: the site's certificate was refused"
             ]
         );
+    }
+
+    /// Review of #98: a cookie jar the database could not give because it
+    /// could not be reached is an attempt never made; one it refused for
+    /// what it is stays the client's failure.
+    #[test]
+    fn a_cookie_jar_the_database_could_not_give_is_an_attempt_never_made() {
+        let jar = |error: kage_store::StoreError| {
+            PathExecutor::http_failure(&HttpError::Cookies(kage_http::CookieBackendError::Store(
+                error,
+            )))
+        };
+        let cut = jar(kage_store::StoreError::Unreachable(Duration::from_secs(3)));
+        assert_eq!(cut.reason.as_deref(), Some(super::STORE_UNAVAILABLE));
+        assert_eq!(cut.courtesy, Courtesy::NotTheSite);
+        let refused = jar(kage_store::StoreError::Unnamed);
+        assert_eq!(refused.reason.as_deref(), Some("http_client"));
     }
 
     #[test]

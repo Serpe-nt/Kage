@@ -1503,26 +1503,33 @@ async fn job_rows(url: &str) -> Vec<String> {
     rows
 }
 
-/// QA round four lock-01: the database failed while what a page came to
-/// was being written (a cut between the server and Postgres, here an
-/// `attempts` insert that the database refuses). That is never the page's
-/// failure: the item waits to be read again, and its job does not end.
-/// Before, the item was written `failed` with the error `internal`, and its
-/// job ended `failed`, though the site had been asked for the page.
-#[tokio::test]
-async fn a_page_whose_attempt_could_not_be_written_waits_and_is_not_failed() {
+/// Makes the database answer every insert into `attempts` with what
+/// `body` (PL/pgSQL) does, and runs a one-page batch through the worker
+/// until its item is no longer `running`. Returns the item and the job as
+/// they stand then.
+async fn page_written_against(body: &str) -> (Value, Value) {
     let mut api = Api::start_with(2, 149, FAST, quick).await;
     pages(&api, "/cut", page("A page")).await;
     let token = api.key(&[Scope::Jobs]).await;
     let pool = api.lab.db.store.pool();
-    for statement in [
+    sqlx::query("CREATE SEQUENCE refused_attempts")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE FUNCTION refuse_attempts() RETURNS trigger LANGUAGE plpgsql AS \
-         $$ BEGIN RAISE EXCEPTION 'the database is cut off'; END $$",
+         $body$ BEGIN {body} RETURN NEW; END $body$"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "CREATE TRIGGER refuse_attempts BEFORE INSERT ON attempts \
          FOR EACH ROW EXECUTE FUNCTION refuse_attempts()",
-    ] {
-        sqlx::query(statement).execute(pool).await.unwrap();
-    }
+    )
+    .execute(pool)
+    .await
+    .unwrap();
     let work = api.work();
     let reply = api
         .post(
@@ -1533,8 +1540,7 @@ async fn a_page_whose_attempt_could_not_be_written_waits_and_is_not_failed() {
         .await;
     assert_eq!(reply.status, StatusCode::CREATED, "{:?}", reply.json());
     let id = reply.json()["id"].as_str().unwrap().to_owned();
-
-    // The site is asked; what it answered cannot be written.
+    // The site is asked; what it answered meets the database's answer.
     let mut asked = 0;
     for _ in 0..100 {
         asked = api.lab.site.received_requests().await.unwrap().len();
@@ -1544,23 +1550,58 @@ async fn a_page_whose_attempt_could_not_be_written_waits_and_is_not_failed() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(asked > 0, "the site was never asked");
-    let items = loop {
-        let items = api.job_items(&token, &id).await;
-        if items[0]["state"] != "running" {
-            break items;
+    // Until the item ended or was put back to wait, for 15 s at most.
+    let mut item = Value::Null;
+    for _ in 0..150 {
+        item = api.job_items(&token, &id).await[0].clone();
+        if (item["state"] != "running" && item["state"] != "queued")
+            || (item["state"] == "queued" && !item["not_before"].is_null())
+        {
+            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert_eq!(items[0]["state"], "queued", "{items:?}");
-    assert_ne!(items[0]["error"], "internal", "{items:?}");
+    }
     let job = api.get(&token, &format!("/v1/jobs/{id}")).await.json();
+    work.stop().await;
+    api.shut_down().await;
+    (item, job)
+}
+
+/// QA round four lock-01: the connection to the database failed while
+/// what a page came to was being written (a cut between the server and
+/// Postgres; here the session that writes the attempt is ended under it,
+/// once). That is never the page's failure: the item waits to be read
+/// again, and its job does not end. Before, the item was written `failed`
+/// with the error `internal`, and its job ended `failed`, though the site
+/// had been asked for the page.
+#[tokio::test]
+async fn a_page_whose_attempt_met_a_lost_connection_waits_and_is_not_failed() {
+    let (item, job) = page_written_against(
+        "IF nextval('refused_attempts') = 1 THEN PERFORM pg_terminate_backend(pg_backend_pid()); END IF;",
+    )
+    .await;
+    assert_eq!(item["state"], "queued", "{item:?}");
+    assert!(!item["not_before"].is_null(), "{item:?}");
+    assert_ne!(item["error"], "internal", "{item:?}");
     assert!(
         job["state"] == "running" || job["state"] == "paused",
         "{job:?}"
     );
     assert_eq!(job["items"]["failed"], 0, "{job:?}");
-    work.stop().await;
-    api.shut_down().await;
+}
+
+/// Review of #98: a statement the database refuses for what it is (here a
+/// trigger's error, as a constraint or a value it cannot take would be)
+/// fails the same way every time. It is the item's failure, not a wait:
+/// deferred, it would come back every minute for ever and ask the site
+/// again each time.
+#[tokio::test]
+async fn a_page_whose_attempt_the_database_refuses_fails() {
+    let (item, job) =
+        page_written_against("RAISE EXCEPTION 'the database refuses this attempt';").await;
+    assert_eq!(item["state"], "failed", "{item:?}");
+    assert_eq!(item["error"], "internal", "{item:?}");
+    assert_eq!(job["items"]["failed"], 1, "{job:?}");
 }
 
 /// QA round four lock-01: a server that may have lost its database's lock

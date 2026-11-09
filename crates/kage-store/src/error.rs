@@ -64,11 +64,104 @@ impl StoreError {
     pub const fn is_conflict(&self) -> bool {
         matches!(self, Self::Conflict { .. })
     }
+
+    /// Whether the database could not be reached or could not run the
+    /// statement now, whatever the statement: the connection failed or was
+    /// ended, the pool had none to give or was closed (a fenced store), or
+    /// Postgres refused for the moment (out of connections or resources,
+    /// shutting down, a serialization failure or a deadlock). Such a
+    /// failure says nothing about what was written, and the same write may
+    /// succeed later. Every other error is the statement's own and fails
+    /// again the same way (QA round four lock-01, review of #98).
+    pub fn is_connection(&self) -> bool {
+        match self {
+            Self::Unreachable(_) => true,
+            Self::Database(error) => match error {
+                sqlx::Error::Io(_)
+                | sqlx::Error::Tls(_)
+                | sqlx::Error::Protocol(_)
+                | sqlx::Error::PoolTimedOut
+                | sqlx::Error::PoolClosed
+                | sqlx::Error::WorkerCrashed
+                | sqlx::Error::BeginFailed => true,
+                sqlx::Error::Database(database) => database
+                    .code()
+                    .is_some_and(|code| transient_sqlstate(&code)),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+/// Whether a SQLSTATE says that the database cannot run the statement now:
+/// class 08 (connection exception), 53 (insufficient resources), 57P01 to
+/// 57P05 (an administrator, a crash or an idle timeout ended the session),
+/// 40001 (serialization failure) and 40P01 (deadlock).
+fn transient_sqlstate(code: &str) -> bool {
+    code.starts_with("08")
+        || code.starts_with("53")
+        || matches!(
+            code,
+            "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::StoreError;
+
+    /// Review of #98: only a failure of the connection, never one of the
+    /// statement, is a store that cannot be reached.
+    #[test]
+    fn only_a_failed_connection_is_a_store_that_cannot_be_reached() {
+        for reached in [
+            StoreError::from(sqlx::Error::PoolClosed),
+            StoreError::from(sqlx::Error::PoolTimedOut),
+            StoreError::from(sqlx::Error::WorkerCrashed),
+            StoreError::from(sqlx::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::ConnectionReset,
+            ))),
+            StoreError::from(sqlx::Error::Protocol("unexpected end".to_owned())),
+            StoreError::Unreachable(std::time::Duration::from_secs(3)),
+        ] {
+            assert!(reached.is_connection(), "{reached}");
+        }
+        for own in [
+            StoreError::from(sqlx::Error::RowNotFound),
+            StoreError::Conflict {
+                constraint: "pk".to_owned(),
+            },
+            StoreError::Corrupt {
+                table: "jobs",
+                column: "state",
+                reason: "unknown".to_owned(),
+            },
+            StoreError::OutOfRange {
+                table: "jobs",
+                column: "items_total",
+            },
+            StoreError::Unnamed,
+        ] {
+            assert!(!own.is_connection(), "{own}");
+        }
+        for (code, transient) in [
+            ("08006", true),
+            ("08P01", true),
+            ("53300", true),
+            ("57P01", true),
+            ("57P03", true),
+            ("40001", true),
+            ("40P01", true),
+            ("P0001", false),
+            ("23505", false),
+            ("22P02", false),
+            ("42501", false),
+            ("57014", false),
+        ] {
+            assert_eq!(super::transient_sqlstate(code), transient, "{code}");
+        }
+    }
 
     #[test]
     fn non_database_errors_are_not_conflicts() {

@@ -29,7 +29,9 @@ tests:
     input_series:
       # A healthy server confirms its lock every 15 s; the other was cut
       # off from its database after 60 s, and its metrics listener goes on
-      # serving the last confirmation.
+      # serving the last confirmation. The age is the sample's: at 1m both
+      # were just confirmed, at 2m the cut one's last confirmation is 60 s
+      # older than the scrape that served it.
       - series: 'kage_server_lock_confirmed_timestamp_seconds{job="kage",instance="healthy:9464"}'
         values: '0+15x12'
       - series: 'kage_server_lock_confirmed_timestamp_seconds{job="kage",instance="cut:9464"}'
@@ -43,7 +45,7 @@ tests:
         exp_alerts:
           - exp_labels: { severity: critical, job: kage, instance: "cut:9464" }
             exp_annotations:
-              summary: kage has not confirmed its database's lock for over 35 s; cut off from its database, it stops by itself
+              summary: kage had not confirmed its database's lock for over 30 s when it was scraped; cut off from its database, it stops by itself
               runbook: docs/runbooks/observability.md
 
   - name: no proxy can be used
