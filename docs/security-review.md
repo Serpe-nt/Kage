@@ -314,6 +314,14 @@ it.
   comes only with `testcontainers` 0.27.3, a dev-dependency of the test
   suites, and no shipped binary links it; `testcontainers` 0.28.0, the
   newest, still requires it.
+- **RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0, C SQLite
+  CVE-2026-119375, medium)** is ignored in `deny.toml` and
+  `.cargo/audit.toml` until 2026-12-31 or the first `sqlx` on
+  `libsqlite3-sys` 0.39, whichever comes first. It is only an entry of
+  `Cargo.lock`, the dependency of sqlx 0.9.0's SQLite driver, which no
+  crate of Kage enables with any feature: it is never built or linked
+  (`cargo tree -i libsqlite3-sys --all-features -e all` prints nothing).
+  Kage's store is Postgres.
 - **The stand-in self-tests of a proxy**: no longer an exception since
   2.0.2. `kage selftest browser --proxy` hands its browser a forwarder of
   the command's own under the stand-in's credential, and `kage selftest

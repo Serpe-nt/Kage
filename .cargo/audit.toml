@@ -24,4 +24,9 @@ ignore = [
     # the newest, still requires it. Review by 2026-12-31, or drop it with
     # the first testcontainers without it.
     "RUSTSEC-2026-0440",
+    # `libsqlite3-sys` 0.37.0 is only an entry of Cargo.lock: sqlx
+    # 0.9.0's SQLite driver, which no crate of Kage enables, so it is
+    # never built or linked. Review by 2026-12-31, or drop it with the
+    # first sqlx on libsqlite3-sys 0.39.
+    "RUSTSEC-2026-0459",
 ]
