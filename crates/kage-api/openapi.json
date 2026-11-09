@@ -6895,7 +6895,7 @@
         "properties": {
           "allowed": {
             "type": "boolean",
-            "description": "Whether the file allows the address; true when nothing is known,\nfalse when the file is unreachable (RFC 9309 §2.3.1.4: `robots_denied`,\n`robots_unavailable` where the file is enforced). Under `report` a\npage that is not allowed is fetched all the same."
+            "description": "Whether the file allows the address; true when nothing is known,\nfalse when the file could not be had (RFC 9309 §2.3.1.4): every page\nrefused `robots_unavailable` or `robots_no_scout` where the file is\nenforced, and a page of a site that reports a file kept as\nunreachable. Under `report` a page that is not allowed is fetched all\nthe same."
           },
           "crawl_delay": {
             "type": [

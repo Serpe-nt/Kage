@@ -352,9 +352,10 @@ pub const fn unasked() -> RobotsVerdict {
     }
 }
 
-/// The verdict of a file that could not be had: it was asked for and is
-/// kept as unreachable, which disallows every address (RFC 9309 §2.3.1.4,
-/// spec §14) until it is asked for again. Not the file's own verdict
+/// The verdict of a file that could not be had: kept as unreachable, or
+/// not had at all (no scout could ask, or the attempt failed before the
+/// site had a say). Either disallows every address (RFC 9309 §2.3.1.4,
+/// spec §14) until the file is asked for again. Not the file's own verdict
 /// (`fetched: false`), and never `allowed` beside a refusal (QA round
 /// three's level0-04).
 pub const fn unreachable() -> RobotsVerdict {

@@ -552,9 +552,11 @@ pub(crate) struct RobotsView {
     /// `robots.error_ttl`), which disallows the address.
     pub(crate) fetched: bool,
     /// Whether the file allows the address; true when nothing is known,
-    /// false when the file is unreachable (RFC 9309 §2.3.1.4: `robots_denied`,
-    /// `robots_unavailable` where the file is enforced). Under `report` a
-    /// page that is not allowed is fetched all the same.
+    /// false when the file could not be had (RFC 9309 §2.3.1.4): every page
+    /// refused `robots_unavailable` or `robots_no_scout` where the file is
+    /// enforced, and a page of a site that reports a file kept as
+    /// unreachable. Under `report` a page that is not allowed is fetched all
+    /// the same.
     pub(crate) allowed: bool,
     /// The line that decided, as `Allow: <pattern>` or `Disallow:
     /// <pattern>`; null when no rule matched.
