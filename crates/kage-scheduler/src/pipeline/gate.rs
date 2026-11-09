@@ -394,10 +394,14 @@ impl Pipeline {
         // Nobody could ask a moment ago: not again before the minute is
         // over (QA round four's pool0-02: every fetch of the origin sent
         // the scout again, and each refusal named a later moment).
-        if self.desk.unanswered(&call.origin).is_some() {
+        let plain = call.need.level == Level::Plain;
+        if self
+            .desk
+            .unanswered(&call.origin, plain, self.now())
+            .is_some()
+        {
             return Ok(Asked::NoAnswer);
         }
-        let plain = call.need.level == Level::Plain;
         // A plain client from the host's connection, or from a plain exit
         // of the pool's own, needs nobody; any other asks through the
         // site's scout: its browser, or its proxy as the site's plain exit.
@@ -485,7 +489,7 @@ impl Pipeline {
             && let Some(retry_at) = self.later(NOT_ASKED_WAIT)
         {
             self.desk
-                .note_unanswered(&call.origin, NOT_ASKED_WAIT, retry_at);
+                .note_unanswered(&call.origin, plain, self.now(), retry_at);
         }
         Ok(asked)
     }
@@ -493,9 +497,10 @@ impl Pipeline {
     /// When an origin's file may be asked for again after nobody could
     /// ask for it: the moment noted then, so that every refusal
     /// meanwhile names the same one.
-    fn unanswered_until(&self, origin: &str) -> Option<DateTime<Utc>> {
+    fn unanswered_until(&self, call: &Call) -> Option<DateTime<Utc>> {
+        let plain = call.need.level == Level::Plain;
         self.desk
-            .unanswered(origin)
+            .unanswered(&call.origin, plain, self.now())
             .or_else(|| self.later(NOT_ASKED_WAIT))
     }
 
@@ -738,7 +743,7 @@ impl Pipeline {
                     retry_at: None,
                 })
                 | Asked::NoAnswer => {
-                    let retry_at = self.unanswered_until(&call.origin);
+                    let retry_at = self.unanswered_until(&call);
                     return Ok(unavailable(course, ROBOTS_UNAVAILABLE, retry_at));
                 }
                 Asked::Refused(refused) => return Ok(Gate::Refused(refused)),
@@ -946,7 +951,7 @@ impl Pipeline {
                 Asked::NoAnswer => {
                     return Ok(RobotsRead::Later(Deferred {
                         reason: Refusal::RobotsUnavailable,
-                        retry_at: self.unanswered_until(&call.origin),
+                        retry_at: self.unanswered_until(&call),
                     }));
                 }
                 Asked::Stopped => return Ok(RobotsRead::Stopped),

@@ -2508,7 +2508,8 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   `Allow: <pattern>` or `Disallow: <pattern>`, its pattern as the file
   writes it, `Disallow: /a/%7euser`, not as it is compared, and its key
   spelt so whatever the file's spelling: `DISALLOW:/x` is `Disallow:
-  /x`; QA round three's level0-03, round four's pool0-03), and a file that could not be had (kept as
+  /x`; QA round three's level0-03, round four's pool0-03), and a file
+  that could not be had (kept as
   unreachable, or no scout could bring it) is `fetched: false,
   allowed: false` (QA round three's level0-04, round four's pool0-01);
   and for a flow of the address it ended on,
