@@ -874,6 +874,8 @@ async fn the_operator_gives_a_site_whose_scout_is_not_ready_another_one() {
         .unwrap();
     assert_eq!(closed.outcome, Outcome::RobotsDenied);
     assert_eq!(closed.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+    // Nothing could be had of the file: never `allowed` (pool0-01).
+    assert_eq!(closed.robots, Some(UNREACHABLE));
 
     // The operator gives the site another scout: neither the one it had
     // nor its reader. It asks from then on.
@@ -1469,6 +1471,39 @@ fn flow_through(urls: &[&str]) -> FetchOrder {
         }),
         ..FetchOrder::get(Url::parse(urls[0]).unwrap(), Priority::Sync)
     }
+}
+
+/// A flow a click took to a site whose file is kept as unreachable
+/// reports it as a fetch of that address would: not allowed (F186 with
+/// QA round three's level0-04; found in the review of round four's
+/// pool0-01). It said `allowed: true`.
+#[tokio::test(start_paused = true)]
+async fn a_flow_that_ended_where_the_file_could_not_be_had_is_not_allowed_there() {
+    let mut world = World::new(4, SITES);
+    robots_txt(&world, |_| server_error(503));
+    // The site's file is asked for once and kept as unreachable.
+    let refused = world
+        .pipeline
+        .fetch(get("https://down.enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(refused.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+    assert_eq!(refused.robots, Some(UNREACHABLE));
+
+    world.script.then(page_with(
+        "https://down.enforced.example/clicked",
+        &serde_json::json!({}),
+    ));
+    let clicked = world
+        .pipeline
+        .fetch(flow_through(&["https://free.example/start"]))
+        .await
+        .unwrap();
+    assert_eq!(clicked.outcome, Outcome::Ok, "{:?}", clicked.reason);
+    assert_eq!(clicked.robots, Some(UNREACHABLE));
+    // Nothing more was asked of the file.
+    assert_eq!(asked(&world).0.len(), 1);
+    world.shut_down().await;
 }
 
 #[tokio::test(start_paused = true)]

@@ -260,7 +260,7 @@ describe('the generated client', () => {
                 status: null,
                 reason: 'robots_unavailable',
                 retry_at: '2026-10-11T13:00:00Z',
-                robots: { fetched: false, allowed: true },
+                robots: { fetched: false, allowed: false },
               }),
             );
           } else if (asked.url.endsWith('/too-long')) {

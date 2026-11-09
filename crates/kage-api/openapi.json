@@ -6907,7 +6907,7 @@
           },
           "fetched": {
             "type": "boolean",
-            "description": "Whether the verdict is the file's. False when nothing is known of\nit: the site's policy never asks for it (the default), the request\nsaid `ignore`, or the site's scout has not brought it yet; and when\nthe file could not be had (it is kept as unreachable for\n`robots.error_ttl`), which disallows the address."
+            "description": "Whether the verdict is the file's. False when nothing is known of\nit: the site's policy never asks for it (the default), the request\nsaid `ignore`, or the site's scout has not brought it yet; and when\nthe file could not be had (it is kept as unreachable for\n`robots.error_ttl`, or no scout could bring it), which disallows the\naddress."
           },
           "matched_rule": {
             "type": [

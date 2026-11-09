@@ -2477,8 +2477,10 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   `{ fetched, allowed, matched_rule, crawl_delay }` on every result: of the
   address that was asked for (`matched_rule` is the line as the file
   writes it, `Disallow: /a/%7euser`, not as it is compared; QA round
-  three's level0-03), and a file kept as unreachable is `fetched: false,
-  allowed: false` (QA round three's level0-04); and for a flow of the address it ended on,
+  three's level0-03), and a file that could not be had (kept as
+  unreachable, or no scout could bring it) is `fetched: false,
+  allowed: false` (QA round three's level0-04, round four's pool0-01);
+  and for a flow of the address it ended on,
   under its own site's policy, from what is known of that site's file
   (nothing is asked for it; F186). The
   parser and the matcher are Kage's; the `robotstxt` crate (a port of
