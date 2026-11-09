@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Clones the commit under test from the bundle into a volume, builds the
 # three images (compose) and the host-side CLI, installs the node projects.
-# Writes its status to /out/prepare.status.
+# Writes its status to /out/prepare.status. QA_PREPARE=images builds the
+# images only.
 set -uo pipefail
 rm -f /out/prepare.status
 repo=/target/qa/kage
@@ -16,6 +17,11 @@ env_setup='export PATH=/opt/cargo/bin:/opt/node/bin:/usr/local/go/bin:$PATH RUST
 # The images.
 su dev -c "${env_setup}; cd ${repo} && scripts/dev-secrets.sh && docker compose --file deploy/compose.yaml build" > /out/build-images.log 2>&1
 images=$?
+if [ "${QA_PREPARE:-all}" = images ]; then
+    # Round four's browsers needed the images only: no cargo target on the disk.
+    echo "images=${images} cli=skipped node=skipped" > /out/prepare.status
+    exit 0
+fi
 # The CLI on this side (for just openapi and config checks), and the node projects.
 su dev -c "${env_setup}; cd ${repo} && cargo build --package kage --locked" > /out/build-cli.log 2>&1
 cli=$?
