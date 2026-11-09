@@ -231,7 +231,8 @@ pub(crate) async fn open(
         .map_err(|error| match error {
             SessionError::NoPersona => ApiError::new(
                 ErrorCode::NoMatchingPersona,
-                "no persona that is ready matches the hints and the domain's policy",
+                "no persona that is ready matches the hints and the domain's policy, other \
+                 than the robots.txt scout of the domain's site",
             ),
             SessionError::Store(error) => ApiError::internal(&error),
         })?;

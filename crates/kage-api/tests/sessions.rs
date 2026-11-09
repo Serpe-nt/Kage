@@ -34,6 +34,14 @@ async fn persona_of(api: &Api, session: &str) -> uuid::Uuid {
         .unwrap()
 }
 
+/// The `robots.txt` scout of the lab's site, when it has one.
+async fn scout_of_site(api: &Api) -> Option<uuid::Uuid> {
+    sqlx::query_scalar("SELECT persona_id FROM site_scouts WHERE site = 'kage.test'")
+        .fetch_optional(api.lab.store().pool())
+        .await
+        .unwrap()
+}
+
 /// QA round four's pool0-04: a session for a site was pinned to the
 /// site's `robots.txt` scout and read the site as a person, from the
 /// address its level 0 leaves by (spec §14, §25). A session for the
@@ -53,13 +61,39 @@ async fn the_sites_scout_is_never_a_sessions_persona_there() {
         .await;
     assert_eq!(early.status, StatusCode::CREATED, "{:?}", early.json());
     let scout = persona_of(&api, "early").await;
-    sqlx::query(
-        "INSERT INTO site_scouts (site, persona_id, since) VALUES ('kage.test', $1, now())",
-    )
-    .bind(scout)
-    .execute(api.lab.store().pool())
-    .await
-    .unwrap();
+    // A job of that session accepted before then.
+    let accepted = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({
+                "type": "batch",
+                "urls": [Api::url("/a")],
+                "defaults": { "level": 1 },
+                "session_id": "early",
+            }),
+        )
+        .await;
+    assert_eq!(
+        accepted.status,
+        StatusCode::CREATED,
+        "{:?}",
+        accepted.json()
+    );
+    let accepted = accepted.json()["id"].as_str().unwrap().to_owned();
+    // The operator gives the site a scout until it is that persona: the
+    // first is drawn, the next is never the one the site had.
+    let admin = api.key(&[Scope::Admin]).await;
+    for _ in 0..2 {
+        if scout_of_site(&api).await == Some(scout) {
+            break;
+        }
+        let reply = api
+            .post(&admin, "/v1/admin/sites/kage.test/scout", &json!({}))
+            .await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+    }
+    assert_eq!(scout_of_site(&api).await, Some(scout));
 
     // It fetches nothing of the site.
     let reply = api
@@ -86,6 +120,20 @@ async fn the_sites_scout_is_never_a_sessions_persona_there() {
         .await;
     let problem = job.problem(StatusCode::CONFLICT, "session_persona_conflict");
     assert_eq!(problem["constraint"], "robots.scout");
+    // The job accepted before: its item is refused when it runs.
+    let work = api.work();
+    let done = api
+        .job_until(&token, &accepted, |job| {
+            matches!(
+                job["state"].as_str(),
+                Some("succeeded" | "partial" | "failed" | "cancelled")
+            )
+        })
+        .await;
+    assert_eq!(done["state"], "failed", "{done}");
+    let items = api.job_items(&token, &accepted).await;
+    assert_eq!(items[0]["error"], "session_persona_conflict", "{items:?}");
+    work.stop().await;
     assert!(api.lab.received("/a").await.is_empty());
     // Asked to stay with the site, the open session is a conflict too.
     let reply = api

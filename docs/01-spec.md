@@ -2437,11 +2437,11 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
   domain), which asks for the `robots.txt` of each of the site's origins
   and for its sitemaps (§13) and never reads a page of the site; the
   pipeline keeps it out of every other fetch of the site, a session's
-  too: a session opened for the site is never pinned to it, and a
-  session whose persona it is fetches nothing of the site (`409
-  session_persona_conflict`, constraint `robots.scout`; QA round four's
-  pool0-04). It is
-  remembered (`site_scouts`), so that one address is marked and no other.
+  too: a session opened for the site is not pinned to it, and a session
+  whose persona it is, or has become since, fetches nothing of the site
+  (`409 session_persona_conflict`, constraint `robots.scout`; QA round
+  four's pool0-04). It is remembered (`site_scouts`), so that one
+  address is marked and no other.
   The scout is, in this order: the persona that asked before; a ready
   persona the site's policy keeps from reading anyway (another country or
   engine), which costs the site no reader; a ready persona that has not
