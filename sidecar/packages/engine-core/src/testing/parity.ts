@@ -2901,6 +2901,47 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(median(lent)).toBeGreaterThan(0.75 * median(spaces));
     });
 
+    it('names a key lent after the display’s first key, as a keyboard names it (QA round four typing-01)', async () => {
+      // Chrome reads the display's key map when its first key comes, and
+      // again only when the display announces a new keyboard: a key lent
+      // later was named "\u0000" (keyCode 0), though the field got its
+      // letter. Every flow of a persona but its first typed after a key
+      // already: a select's arrows, a word with nothing lent.
+      const typing = (text: string) => ({
+        behavior: { seed: SEEDS.first, typos: false },
+        timeout_ms: 120_000,
+        actions: [
+          { action: 'goto' as const, url: named('/input/') },
+          { action: 'wait_for' as const, selector: 'body[data-ready]' },
+          { action: 'click' as const, selector: '#field' },
+          { action: 'type' as const, selector: '#field', text },
+          { action: 'wait_for' as const, ms: 300 },
+          { action: 'extract' as const, capture: DOM },
+        ],
+      });
+      const runs = await withContext('lent-after-first-key', async (context) => [
+        await flow(context, typing('abc')),
+        await flow(context, typing('ñ жз abc')),
+        await flow(context, typing('ю я ñ')),
+      ]);
+      const reports = runs.map((run) => inputReportOf(run.steps.at(-1)?.capture?.dom_html ?? null));
+      const lent = reports.slice(1).map((report) =>
+        keysAndHolds(report)
+          .keys.filter((event) => event.code === '')
+          .map((event) => `${event.type}:${event.key ?? ''}`),
+      );
+      measured('the keys lent after the first key of the display', { lent });
+      expect(reports.map((report) => report.field)).toEqual(['abc', 'ñ жз abc', 'ю я ñ']);
+      for (const report of reports) {
+        expect(keysAndHolds(report).keys.filter((event) => event.key === '\u0000')).toEqual([]);
+      }
+      // Each lent letter is named as itself, down and up.
+      expect(lent).toEqual([
+        ['ñ', 'ж', 'з'].flatMap((letter) => [`keydown:${letter}`, `keyup:${letter}`]),
+        ['ю', 'я', 'ñ'].flatMap((letter) => [`keydown:${letter}`, `keyup:${letter}`]),
+      ]);
+    });
+
     it('stops a type step whose budget ran out: the next flow on the context hears none of its keys', async () => {
       // A type step longer than its budget typed on after the flow had
       // returned, into the page of whatever came next on the context.
