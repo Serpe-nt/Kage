@@ -59,8 +59,7 @@ use kage_core::ids::{JobId, JobItemId, PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::{Refusal, Visitors};
 use kage_core::schedule::queue::Priority;
-use kage_persona::PersonaError;
-use kage_proxy::{CredentialCipher, PoolError};
+use kage_proxy::CredentialCipher;
 use kage_scheduler::{
     Arrival, Capture, FetchOrder, FetchReport, INTERRUPTED, JobFetch, Running, SchedulerError, Stop,
 };
@@ -328,24 +327,6 @@ fn store_failed() -> ItemEnd {
     }
 }
 
-/// Whether a fetch failed because the database could not be reached: the
-/// store, or the store under the persona manager or the proxy pool, lost
-/// its connection or had none to give (a cut, a fenced store). Such a
-/// failure says nothing about the page (QA round four lock-01). A
-/// statement the database refused for what it is (a constraint, a value it
-/// cannot take, a trigger's error) fails the same way every time: that is
-/// the item's failure, not a wait (review of #98).
-fn the_stores(error: &SchedulerError) -> bool {
-    match error {
-        SchedulerError::Store(store)
-        | SchedulerError::Pool(PoolError::Store(store))
-        | SchedulerError::Persona(
-            PersonaError::Store(store) | PersonaError::Pool(PoolError::Store(store)),
-        ) => store.is_connection(),
-        _ => false,
-    }
-}
-
 /// What an item comes to when the store failed under it: it waits
 /// (`store`) when the database could not be reached, and fails
 /// (`internal`) when the database refused the statement for what it is,
@@ -493,9 +474,17 @@ impl Work {
         // (QA round four's pool0-04).
         let conflict = match conflict_of(&found.persona, planned, &policy) {
             Some(constraint) => Some(constraint),
+            // A site's scout that cannot be looked up because the
+            // database cannot be reached is the database's failure.
             None => scout_conflict(&self.engine, &found.persona, planned)
                 .await
-                .map_err(|_| failed(ErrorCode::Internal))?,
+                .map_err(|error| {
+                    if error.code() == ErrorCode::Unavailable {
+                        store_failed()
+                    } else {
+                        internal()
+                    }
+                })?,
         };
         if conflict.is_some() {
             return Err(failed(ErrorCode::SessionPersonaConflict));
@@ -624,7 +613,7 @@ impl Work {
             // The item stays this worker's, to be taken up again, or goes
             // with the job's lease to whoever claims it next (QA round four
             // lock-01).
-            Err(error) if the_stores(&error) => {
+            Err(error) if error.is_store_unreachable() => {
                 tracing::warn!(job = %self.job, %request, %error, "an item of a job could not be written; it waits");
                 store_failed()
             }
