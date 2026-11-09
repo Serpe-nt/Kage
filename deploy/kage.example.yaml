@@ -43,7 +43,9 @@ server:
   # How many distinct domains get a domain label of their own in the
   # metrics: the domains the policy files name first, then the first ones
   # asked for since the start; every later one is counted under "other" (at
-  # most 10000; 0 labels every domain "other").
+  # most 10000; 0 labels every domain "other"). A domain a policy reload adds
+  # takes the room that is left; once there is none it is "other" until the
+  # next start, and the reload says so in the log.
   metrics_max_domains: 500
   # Largest request body in bytes.
   max_body_bytes: 1048576
@@ -559,7 +561,9 @@ jobs:
   # once. The scheduler's own caps still decide what leaves.
   max_items_in_flight: 24
   # Jobs one key may have open (queued, running or paused) at once; one
-  # more is refused with 429 jobs_limited.
+  # more is refused with 429 jobs_limited. A fetch carried on as a job
+  # (origin sync_overflow) is not one of them: the key's limits on fetches
+  # hold it.
   max_open_per_key: 20
   # Items of its open jobs one key may have waiting at once, the new job's
   # included, a crawl's max_pages counted from its acceptance (at least

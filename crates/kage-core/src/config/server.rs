@@ -260,18 +260,38 @@ pub(super) fn validate(server: &ServerConfig) -> Result<(), String> {
                 .to_owned(),
         );
     }
-    for origin in &server.cors_allowed_origins {
+    for (index, origin) in server.cors_allowed_origins.iter().enumerate() {
         if !is_origin(origin) || origin.ends_with('/') {
             // The origin is not repeated: it may hold a password.
-            return Err(
-                "server.cors_allowed_origins: an entry is not an origin such as \
+            return Err(format!(
+                "server.cors_allowed_origins[{index}] is not an origin such as \
                  https://console.example.org (a scheme, a host, an optional port, nothing else: \
                  no credentials, no path, no wildcard; a browser sends no other)"
-                    .to_owned(),
-            );
+            ));
+        }
+        // An origin is compared as it is written, and a browser writes its
+        // scheme and host in lower case and leaves the scheme's own port
+        // out (RFC 6454 §6.2): any other spelling matches nothing (QA round
+        // four, api-07). What a browser would send is safe to say: an
+        // origin holds no credentials.
+        if let Some(sent) = as_a_browser_sends(origin)
+            && sent != *origin
+        {
+            return Err(format!(
+                "server.cors_allowed_origins[{index}] is not written as a browser sends it, and \
+                 would match nothing: write {sent}"
+            ));
         }
     }
     Ok(())
+}
+
+/// An origin as a browser writes it in `Origin`: the scheme and the host in
+/// lower case (a name in its ASCII form), the scheme's own port left out.
+fn as_a_browser_sends(origin: &str) -> Option<String> {
+    url::Url::parse(origin)
+        .ok()
+        .map(|url| url.origin().ascii_serialization())
 }
 
 /// Whether a text is an origin as a browser sends it in `Origin`: `http`
@@ -393,9 +413,51 @@ mod tests {
             "ftp://console.example.org",
         ] {
             let error = with(bad).unwrap_err();
-            assert!(error.starts_with("server.cors_allowed_origins"), "{error}");
+            assert!(
+                error.starts_with("server.cors_allowed_origins[0]"),
+                "{error}"
+            );
             assert!(!error.contains("secret-password"), "{error}");
         }
+    }
+
+    /// QA round four, api-07: an origin is compared as it is written, so one
+    /// written in another case or with its scheme's own port matches no
+    /// origin a browser sends; it is refused, with the form that would.
+    #[test]
+    fn a_cors_origin_is_written_as_a_browser_sends_it() {
+        let with = |origins: &[&str]| {
+            let server = ServerConfig {
+                cors_allowed_origins: origins.iter().map(|&origin| origin.to_owned()).collect(),
+                ..ServerConfig::default()
+            };
+            validate(&server)
+        };
+        for (written, sent) in [
+            ("HTTPS://Console.QA.test", "https://console.qa.test"),
+            ("https://b.qa.test:443", "https://b.qa.test"),
+            ("http://c.qa.test:80", "http://c.qa.test"),
+            ("https://bücher.example", "https://xn--bcher-kva.example"),
+        ] {
+            let error = with(&["https://fine.example", written]).unwrap_err();
+            assert!(
+                error.starts_with("server.cors_allowed_origins[1] is not written as"),
+                "{error}"
+            );
+            assert!(error.ends_with(&format!("write {sent}")), "{error}");
+        }
+        // As a browser sends them: a port that is not the scheme's own, an
+        // address, a name already in its ASCII form.
+        assert_eq!(
+            with(&[
+                "https://console.qa.test",
+                "http://localhost:5173",
+                "https://b.qa.test:8443",
+                "http://[::1]:8080",
+                "https://xn--bcher-kva.example",
+            ]),
+            Ok(())
+        );
     }
 
     #[test]

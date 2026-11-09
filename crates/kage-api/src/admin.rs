@@ -82,7 +82,7 @@ pub(crate) struct PurgeRequest {
     responses(
         (status = 200, description = "What was deleted.", body = crate::jobs::view::Purged),
         (status = 404, description = "`key_not_found`.", body = Problem, content_type = "application/problem+json"),
-        (status = 422, description = "`before` lies in the future.", body = Problem, content_type = "application/problem+json"),
+        (status = 422, description = "`before` lies in the future, or before 4713 BC, the earliest moment the store keeps.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["admin"]))
 )]
@@ -96,6 +96,14 @@ pub(crate) async fn purge(
     let before = request.before.unwrap_or(now);
     if before > now {
         return Err(ApiError::field("before", "a moment that has passed"));
+    }
+    if before < earliest_stored() {
+        // Postgres holds nothing earlier, and its comparison would fail
+        // inside the store (QA round four, api-04).
+        return Err(ApiError::field(
+            "before",
+            "a moment from 4713 BC on, the earliest the store keeps",
+        ));
     }
     let store = state.store();
     // The jobs that have ended go whole; of those that have not, and of
@@ -128,6 +136,14 @@ pub(crate) async fn purge(
         "artifacts": artifacts,
     }));
     Ok(noted(Json(purged), note))
+}
+
+/// The earliest moment a Postgres `timestamptz` holds: 4713-11-24 BC at
+/// midnight UTC, year -4712 in the proleptic Gregorian count chrono uses.
+fn earliest_stored() -> DateTime<Utc> {
+    chrono::NaiveDate::from_ymd_opt(-4712, 11, 24)
+        .and_then(|day| day.and_hms_opt(0, 0, 0))
+        .map_or(DateTime::<Utc>::MIN_UTC, |moment| moment.and_utc())
 }
 
 /// A response with what its audit event should say about it.

@@ -341,13 +341,33 @@ fn check_level(crawl: &CrawlJob) -> ApiResult<()> {
     Ok(())
 }
 
+/// Whether a seed carries a user or a password, or, where it does not parse,
+/// may: an `@` in what would be its authority.
+fn carries_credentials(seed: &str) -> bool {
+    if let Ok(url) = url::Url::parse(seed) {
+        !url.username().is_empty() || url.password().is_some()
+    } else {
+        let rest = seed.split_once("://").map_or(seed, |(_, rest)| rest);
+        rest.split(['/', '?', '#'])
+            .next()
+            .is_some_and(|authority| authority.contains('@'))
+    }
+}
+
 /// Checks a crawl and turns its seeds into orders.
 async fn plan_seeds(crawl: &CrawlJob, checks: Checks<'_>) -> ApiResult<PlannedCrawl> {
     let rules = rules(crawl, checks)?;
     let at = |error: ApiError, index: usize| {
-        error
-            .with("item", u64::try_from(index).unwrap_or(u64::MAX))
-            .with("seed", crawl.seeds[index].as_str())
+        let error = error.with("item", u64::try_from(index).unwrap_or(u64::MAX));
+        let seed = crawl.seeds[index].as_str();
+        // A seed that carries a user or a password is named by its place
+        // only: a problem document is what clients, gateways and their logs
+        // keep (F133, QA round four api-06).
+        if carries_credentials(seed) {
+            error
+        } else {
+            error.with("seed", seed)
+        }
     };
     let mut planned = Vec::with_capacity(rules.seeds.len());
     for (index, seed) in rules.seeds.iter().enumerate() {
@@ -854,6 +874,33 @@ mod tests {
         assert_eq!(run.visitors, 1);
         // An unknown member is refused, as everywhere.
         assert!(serde_json::from_value::<CrawlJob>(json!({ "seeds": [], "depth": 3 })).is_err());
+    }
+
+    /// QA round four, api-06: a seed with a password is refused as a fetch
+    /// is, named by its place, and the problem document never repeats it
+    /// (it said the whole seed in `seed`); another refused seed is still
+    /// said.
+    #[tokio::test]
+    async fn a_seed_that_carries_credentials_is_never_repeated() {
+        for seed in [
+            "http://qa4:s3cret-pw@example.org/?a06=1",
+            "http://qa4@example.org/",
+            "http://qa4:s3cret-pw@exa mple.org/",
+        ] {
+            let error = planned(json!({ "seeds": ["https://example.org/", seed] }))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), ErrorCode::InvalidUrl, "{seed}");
+            assert_eq!(said(&error, "item"), "1", "{seed}");
+            assert_eq!(said(&error, "seed"), "", "{seed}");
+            let document = serde_json::to_string(&error.problem()).unwrap();
+            assert!(!document.contains("s3cret-pw"), "{document}");
+            assert!(!document.contains("qa4"), "{document}");
+        }
+        let error = planned(json!({ "seeds": ["ftp://example.org/x"] }))
+            .await
+            .unwrap_err();
+        assert_eq!(said(&error, "seed"), "ftp://example.org/x");
     }
 
     #[tokio::test]

@@ -172,6 +172,19 @@ the first block too and counts a restart's reset as zero; a query of your
 own over those three families should do the same where one event matters.
 A counter that exists from zero is reset by a restart like any other.
 
+The `domain` label has at most `server.metrics_max_domains` (500) values
+of its own: the domains the policy files name, labelled first at the
+start, then the first ones asked for since the start. Every other domain
+is counted under `domain="other"`, which sets no
+`kage_policy_breaker_threshold`, so the block-rate alert does not fire for
+it; `kage_breaker_open{domain="other"}` is 1 while any of them is paused,
+and the block report's query lists those breakers by domain. A domain a
+policy reload adds takes the room that is left; once the bound is reached
+it stays `other` until the next start, and the reload logs "domains the
+reloaded policies name have no metrics label of their own" with how many
+and the first: restart the server, or raise the bound, to give them
+theirs.
+
 `kage_server_lock_held` and `kage_server_lock_confirmed_timestamp_seconds`
 say whether the server still holds its database's lock (ADR 0005) and
 when it last saw it held. The look that confirms it runs every 15 s on

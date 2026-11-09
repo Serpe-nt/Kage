@@ -1691,6 +1691,28 @@ async fn an_admin_purges_a_keys_data_and_retention_deletes_what_is_old() {
     )
     .await
     .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+    // QA round four, api-04: before the earliest moment Postgres keeps is
+    // the caller's value out of range, not a failure inside Kage (`500`,
+    // "timestamp out of range" before); the earliest itself is taken.
+    for out_of_range in ["-4713-11-24T00:00:00Z", "-262143-01-01T00:00:00Z"] {
+        let refused = api
+            .post(
+                &admin,
+                "/v1/admin/purge",
+                &json!({ "key_id": mine.to_string(), "before": out_of_range }),
+            )
+            .await
+            .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
+        assert_eq!(refused["field"], "before", "{refused}");
+    }
+    let earliest = api
+        .post(
+            &admin,
+            "/v1/admin/purge",
+            &json!({ "key_id": mine.to_string(), "before": "-4712-11-24T00:00:00Z" }),
+        )
+        .await;
+    assert_eq!(earliest.status, StatusCode::OK, "{:?}", earliest.json());
     // Before anything of the key existed: nothing goes.
     let nothing = api
         .post(
@@ -2116,6 +2138,8 @@ async fn a_webhook_to_a_host_with_an_empty_label_is_refused_whatever_the_operato
     let listed = vec![
         "http://hooks.kage.test..:8090".to_owned(),
         "http://hooks.kage.test:8090".to_owned(),
+        // Set here past the load's check, which refuses it (guard-04).
+        "http://hooks.kage.test:25".to_owned(),
     ];
     let mut api = Api::start_with(1, 149, BROWSER_FAST, move |config| {
         quick(config);
@@ -2146,6 +2170,26 @@ async fn a_webhook_to_a_host_with_an_empty_label_is_refused_whatever_the_operato
         problem["detail"].as_str().unwrap().contains("empty label"),
         "{problem}"
     );
+    assert_eq!(count(&api, "jobs").await, 0);
+
+    // QA round four, guard-04: a private receiver on a port the browsers
+    // refuse is refused too, however the port is spelt; being the
+    // operator's own lifts the address check, not G3's port (it was
+    // accepted and posted to port 25).
+    for hook in [
+        "http://hooks.kage.test:25/hooks",
+        "http://hooks.kage.test:025/hooks",
+    ] {
+        let problem = api
+            .post(&token, "/v1/jobs", &batch(hook))
+            .await
+            .problem(StatusCode::UNPROCESSABLE_ENTITY, "ssrf_denied");
+        assert_eq!(problem["field"], "webhook.url", "{problem}");
+        assert!(
+            problem["detail"].as_str().unwrap().contains("port 25"),
+            "{problem}"
+        );
+    }
     assert_eq!(count(&api, "jobs").await, 0);
 
     let reply = api
@@ -2310,6 +2354,56 @@ async fn a_key_may_have_so_many_open_jobs_and_waiting_items() {
     let third = api.post(&token, "/v1/jobs", &batch(3)).await;
     assert_eq!(third.status, StatusCode::CREATED);
     assert_eq!(count(&api, "jobs").await, 7);
+    api.shut_down().await;
+}
+
+/// QA round four, api-05: a fetch carried on as a job (`sync_overflow`) is
+/// the fetch's, never refused by L2's bound, and so not counted toward it:
+/// a key whose fetch was carried may still open the jobs it may have, and
+/// its refusal counts only the jobs it asked for. (It counted them before,
+/// though nothing held them to the bound: 6 open with a bound of 1.)
+#[tokio::test]
+async fn a_fetch_carried_on_as_a_job_is_no_job_of_the_keys_bound() {
+    let mut api = Api::start_with(2, 149, FAST, |config| {
+        quick(config);
+        config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
+        config.jobs.max_open_per_key = 1;
+    })
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/carried"))
+        // Slow enough that the carried job is open while the key asks.
+        .respond_with(page("Slow").set_delay(Duration::from_secs(5)))
+        .mount(&api.lab.site)
+        .await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    let batch = json!({ "type": "batch", "urls": urls("/after", 1), "defaults": { "level": 3 } });
+
+    let carried = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/carried"), "level": 1 }),
+        )
+        .await;
+    assert_eq!(carried.status, StatusCode::ACCEPTED, "{:?}", carried.json());
+    let job = carried.json()["job_id"].as_str().unwrap().to_owned();
+    let seen = api.get(&token, &format!("/v1/jobs/{job}")).await.json();
+    assert_eq!(seen["origin"], "sync_overflow");
+    assert!(
+        ["queued", "running"].contains(&seen["state"].as_str().unwrap()),
+        "{seen}"
+    );
+
+    // The carried fetch holds no room: the key's one job is still there.
+    let first = api.post(&token, "/v1/jobs", &batch).await;
+    assert_eq!(first.status, StatusCode::CREATED, "{:?}", first.json());
+    // And the refusal counts the job the key asked for, not the fetch.
+    let refused = api
+        .post(&token, "/v1/jobs", &batch)
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(refused["open_jobs"], json!(1), "{refused}");
     api.shut_down().await;
 }
 

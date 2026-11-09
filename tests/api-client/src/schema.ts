@@ -4164,7 +4164,7 @@ export interface operations {
             413: components["responses"]["PayloadTooLarge"];
             414: components["responses"]["UriTooLong"];
             415: components["responses"]["UnsupportedMediaType"];
-            /** @description `before` lies in the future. */
+            /** @description `before` lies in the future, or before 4713 BC, the earliest moment the store keeps. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4374,6 +4374,8 @@ export interface operations {
             /** @description A limit of the key or of the API; `Retry-After` says when. */
             429: {
                 headers: {
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -4492,6 +4494,8 @@ export interface operations {
             /** @description A limit of the key or of the API; `jobs_limited`: the key has as many open jobs (`jobs.max_open_per_key`) or waiting items (`jobs.max_queued_items_per_key`) as it may have. */
             429: {
                 headers: {
+                    /** @description Seconds to wait before asking again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

@@ -1599,6 +1599,17 @@ pub(crate) async fn plan_webhook(
         .with("field", FIELD)
         .with("origin", origin));
     }
+    // A port the browsers refuse is refused for every receiver, a private
+    // one too: being the operator's own lifts the address check, not the
+    // port's (G3; QA round four, guard-04). The configuration refuses such
+    // an origin at load; this holds where it was not checked.
+    if let Some(port) = url
+        .port_or_known_default()
+        .filter(|&port| kage_core::ssrf::is_unsafe_port(port))
+    {
+        let refused = url_refused(&kage_core::ssrf::SsrfDenial::UnsafePort(port));
+        return Err(ApiError::new(refused.code(), refused.detail()).with("field", FIELD));
+    }
     // A receiver the operator said is its own may sit where the guard lets
     // nobody else go; every other one passes the guard as a target does.
     if !webhooks.is_private(&url) {

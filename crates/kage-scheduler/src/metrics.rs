@@ -83,6 +83,22 @@ impl DomainLabels {
         }
     }
 
+    /// Gives `domains` a label of their own while there is room, as
+    /// [`DomainLabels::name_first`] does, and answers those left without
+    /// one: the domains a policy reload names, which a flood of hosts since
+    /// the start may have left no room for. A label is never taken back from
+    /// a domain that has one, so theirs come at the next start (QA round
+    /// four, obs-01).
+    pub fn name_while_room<'a>(
+        &mut self,
+        domains: impl IntoIterator<Item = &'a str>,
+    ) -> Vec<&'a str> {
+        domains
+            .into_iter()
+            .filter(|domain| self.label(domain) == OTHER_DOMAIN)
+            .collect()
+    }
+
     /// The label of `domain`: its own, while there is room or when it has
     /// one already, else [`OTHER_DOMAIN`].
     pub fn label<'a>(&mut self, domain: &'a str) -> Cow<'a, str> {
@@ -123,6 +139,16 @@ pub fn bound_domains<'a>(max: usize, named: impl IntoIterator<Item = &'a str>) {
     let mut labels = DOMAINS.lock().unwrap_or_else(PoisonError::into_inner);
     labels.set_max(max);
     labels.name_first(named);
+}
+
+/// Names the domains a policy reload names while there is room
+/// ([`DomainLabels::name_while_room`]), and answers those left without a
+/// label of their own.
+pub fn name_reloaded<'a>(named: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+    DOMAINS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .name_while_room(named)
 }
 
 /// The `domain` label a metric carries for `domain`: its own, or
@@ -366,6 +392,22 @@ mod tests {
         assert_eq!(named.label("mine.example"), "mine.example");
         assert_eq!(named.label("ours.example"), "ours.example");
         assert_eq!(named.label("theirs.example"), "other");
+        // QA round four, obs-01: a reload's domains take the room that is
+        // left, and those left without a label are answered, so the server
+        // can say so; one that has a label already keeps it.
+        let mut reloaded = super::DomainLabels::new(3);
+        reloaded.name_first(["mine.example"]);
+        assert_eq!(reloaded.label("flood.example"), "flood.example");
+        assert_eq!(
+            reloaded.name_while_room(["mine.example", "new.example", "later.example"]),
+            ["later.example"]
+        );
+        assert_eq!(reloaded.label("new.example"), "new.example");
+        assert_eq!(reloaded.label("another-flood.example"), "other");
+        assert_eq!(
+            reloaded.name_while_room(["mine.example"]),
+            Vec::<&str>::new()
+        );
         // The process's labels.
         super::bound_domains(super::DEFAULT_MAX_DOMAINS, ["named.example"]);
         assert_eq!(super::domain_label("shop.example"), "shop.example");

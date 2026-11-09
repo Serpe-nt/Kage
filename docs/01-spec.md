@@ -2763,7 +2763,11 @@ new job's included; past either, `POST
 /v1/jobs` is `429 jobs_limited` with the counts and the bounds, a
 `Retry-After` of a minute, and nothing stored (the security review's L2).
 A crawl counts its `max_pages` from its acceptance, less the pages it has
-begun. The check and the insert are one step for the server, so two jobs
+begun. A fetch carried on as a job (§8.4, `origin: sync_overflow`) is the
+fetch's, not a job the key asked for: the bound never refuses it, so it
+does not count toward the bound either; such fetches are held by the
+key's limits on fetches (`max_concurrent`, `requests_per_minute`,
+`daily_page_budget`) (QA round four, api-05). The check and the insert are one step for the server, so two jobs
 asked for at once cannot both pass it, and the same `Idempotency-Key`
 sent twice at once is one job and a replay.
 
@@ -3339,7 +3343,13 @@ value, which the driver would have written to the log (F133). A URL key
 carries no credentials: the sidecars' URLs, a self-test page, an origin
 of `server.cors_allowed_origins`, `webhooks.allowed_origins` or
 `webhooks.private_origins` (F133); a refused entry is named by its place
-(`webhooks.allowed_origins[1]`), never repeated (QA round three api-07).
+(`webhooks.allowed_origins[1]`), never repeated (QA round three api-07);
+so is a warm-up site (`personas.warmup.sites[0]`), which carries no
+credentials either (QA round four api-01). An origin of either webhook
+list on a port the browsers refuse is refused at load, and a job's
+webhook URL on one is `422 ssrf_denied` whatever list its origin is on:
+being the operator's own lifts the address check, not G3's port (QA round
+four guard-04).
 What the program cannot count with is refused at load: `database.max_connections` at most 1000,
 `personas.retention_days` and `personas.archive_after` at most ten years,
 `proxies.health.interval` at most a day (F137); every duration at most
@@ -3403,7 +3413,9 @@ proxy probe), `shutdown_grace` (30 s), `max_connections` (1024),
 `cors_allowed_origins` (none; each an origin as a browser sends it: a
 scheme, a host and an optional port, no credentials, no path and no
 wildcard, which would be compared as it is written and match nothing;
-F136) and `docs` (true). `security` holds
+F136; written as a browser writes it, the scheme and host in lower case
+and the scheme's own port left out, or refused at load with the form to
+write, QA round four api-07) and `docs` (true). `security` holds
 `allow_ip_targets`, `resolve_on_host` and `expose_set_cookie`, all false.
 `jobs` holds `max_items` (10 000), `max_running` (8), `max_items_in_flight`
 (24), `max_open_per_key` (20), `max_queued_items_per_key` (unset: twice `max_items`, at least 20 000; §16.2), `max_age` (7 d), `retention_days` (14), `lease` (1 m),
@@ -3827,6 +3839,12 @@ are gzip-compressed on disk.
   and every later domain is counted under `other` (a domain has a dot, so no site is named so); a domain
   past the bound sets no `kage_policy_breaker_threshold`, and
   `kage_breaker_open{domain="other"}` is 1 while any of them is paused.
+  A domain a policy reload adds is named at the reload while room is
+  left; a label is never taken back from a domain that has one, so when
+  the bound is reached the reloaded domain is counted under `other` until
+  the next start names the policy files' domains first, and the server
+  says so at the reload with a `warn` line naming how many and the first
+  (QA round four, obs-01).
   The API adds `kage_api_requests_total{route,method,status}` (the route
   is the pattern, never the path a client sent; the method one HTTP
   defines, `other` for anything else a client sends, F131),

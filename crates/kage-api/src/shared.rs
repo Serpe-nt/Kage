@@ -117,6 +117,21 @@ const ALL: [&Shared; 11] = [
     &HEADERS_TOO_LARGE,
 ];
 
+/// The header every `429` carries (spec §16.2).
+const RETRY_AFTER: &str = "Retry-After";
+
+/// What the document says of `Retry-After`.
+fn retry_after() -> utoipa::openapi::header::Header {
+    HeaderBuilder::new()
+        .schema(Some(
+            ObjectBuilder::new()
+                .schema_type(SchemaType::Type(Type::Integer))
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64))),
+        ))
+        .description(Some("Seconds to wait before asking again."))
+        .build()
+}
+
 /// A problem document's answer.
 fn problem(shared: &Shared) -> Response {
     let mut response = ResponseBuilder::new()
@@ -128,17 +143,7 @@ fn problem(shared: &Shared) -> Response {
                 .build(),
         );
     if shared.status == "429" {
-        response = response.header(
-            "Retry-After",
-            HeaderBuilder::new()
-                .schema(Some(
-                    ObjectBuilder::new()
-                        .schema_type(SchemaType::Type(Type::Integer))
-                        .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64))),
-                ))
-                .description(Some("Seconds to wait before asking again."))
-                .build(),
-        );
+        response = response.header(RETRY_AFTER, retry_after());
     }
     if shared.status == "401" {
         response = response.header(
@@ -199,6 +204,14 @@ fn complete_operation(operation: &mut Operation) {
     }
     for shared in [&TOO_LARGE, &URI_TOO_LONG, &HEADERS_TOO_LARGE] {
         name(operation, shared);
+    }
+    // A `429` an operation documents itself (`POST /v1/fetch`, `POST
+    // /v1/jobs` with `jobs_limited`) carries `Retry-After` as the shared one
+    // does: every `429` has it (QA round four, api-02).
+    if let Some(RefOr::T(own)) = operation.responses.responses.get_mut(TOO_MANY.status) {
+        own.headers
+            .entry(RETRY_AFTER.to_owned())
+            .or_insert_with(|| RefOr::T(retry_after()));
     }
 }
 
@@ -314,6 +327,14 @@ mod tests {
                         answer["content"]["application/problem+json"].is_object(),
                         "{method} {path} {status}: {answer}"
                     );
+                    // QA round four, api-02: every `429` says it carries
+                    // `Retry-After`, an operation's own one too.
+                    if status == "429" {
+                        assert!(
+                            answer["headers"]["Retry-After"].is_object(),
+                            "{method} {path} 429: {answer}"
+                        );
+                    }
                 }
             }
         }

@@ -1421,7 +1421,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "422": {
-            "description": "`before` lies in the future.",
+            "description": "`before` lies in the future, or before 4713 BC, the earliest moment the store keeps.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1753,6 +1753,15 @@
           },
           "429": {
             "description": "A limit of the key or of the API; `Retry-After` says when.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "description": "Seconds to wait before asking again."
+              }
+            },
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1930,6 +1939,15 @@
           },
           "429": {
             "description": "A limit of the key or of the API; `jobs_limited`: the key has as many open jobs (`jobs.max_open_per_key`) or waiting items (`jobs.max_queued_items_per_key`) as it may have.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "description": "Seconds to wait before asking again."
+              }
+            },
             "content": {
               "application/problem+json": {
                 "schema": {
