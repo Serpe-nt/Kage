@@ -756,8 +756,9 @@ version's date is the day, in UTC, its tag was made.
   or session write leaves it from then on. What was already under way on
   a connection is rolled back as the server ends its own sessions, at once
   when another server took the lock, else as soon as the database
-  answers; every session of the server keeps short TCP keepalives, so
-  Postgres ends what is left no later than it lets the lock go. The server
+  answers; every session of the server keeps the lock's short TCP
+  keepalives and a 60 s TCP user timeout, so Postgres ends what the
+  network cut off of it about a minute after it last answered. The server
   exits within 20 s. Its exit message says when it stopped writing, and
   whether its sessions were ended, not that it stopped before another
   server could take the lock. A cookie jar that cannot be read on a cut is

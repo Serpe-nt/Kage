@@ -346,6 +346,18 @@ fn the_stores(error: &SchedulerError) -> bool {
     }
 }
 
+/// What an item comes to when the store failed under it: it waits
+/// (`store`) when the database could not be reached, and fails
+/// (`internal`) when the database refused the statement for what it is,
+/// which would fail the same way every minute (review of #98).
+fn store_end(error: &StoreError) -> ItemEnd {
+    if error.is_connection() {
+        store_failed()
+    } else {
+        internal()
+    }
+}
+
 /// An item that cannot be run: something inside Kage failed.
 fn internal() -> ItemEnd {
     ItemEnd::Failed {
@@ -665,10 +677,7 @@ impl Work {
             Ok(Err(end)) => return end,
             Err(error) => {
                 tracing::warn!(job = %self.job, %error, "an item's request could not be read");
-                return ItemEnd::Deferred {
-                    reason: "store".to_owned(),
-                    until: None,
-                };
+                return store_end(&error);
             }
         };
         if let Err(end) = self.pin(&mut planned).await {
@@ -697,10 +706,7 @@ impl Work {
             .await
         {
             tracing::warn!(job = %self.job, %error, "an item could not be marked as running");
-            return ItemEnd::Deferred {
-                reason: "store".to_owned(),
-                until: None,
-            };
+            return store_end(&error);
         }
         item.request_id = Some(request);
         item.started_at.get_or_insert(crate::stored(now));
@@ -1416,16 +1422,7 @@ impl Runner {
         let earlier = match work.earlier(request).await {
             Ok(Ok(earlier)) => earlier,
             Ok(Err(end)) => return (id, keeps, end),
-            Err(_) => {
-                return (
-                    id,
-                    keeps,
-                    ItemEnd::Deferred {
-                        reason: "store".to_owned(),
-                        until: None,
-                    },
-                );
-            }
+            Err(error) => return (id, keeps, store_end(&error)),
         };
         if let Err(end) = work.pin(&mut planned.planned).await {
             return (id, keeps, end);
@@ -1437,22 +1434,14 @@ impl Runner {
         }
         // The flow's request is written on its first open item, so that it
         // is found again when the job changes hands.
-        if work
+        if let Err(error) = work
             .state
             .store()
             .job_items()
             .start(first, Some(id), work.now())
             .await
-            .is_err()
         {
-            return (
-                id,
-                keeps,
-                ItemEnd::Deferred {
-                    reason: "store".to_owned(),
-                    until: None,
-                },
-            );
+            return (id, keeps, store_end(&error));
         }
         let order = FetchOrder {
             priority: Priority::Job,

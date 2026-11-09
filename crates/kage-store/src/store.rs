@@ -75,8 +75,10 @@ impl MigrationStatus {
 /// group of tables.
 ///
 /// A server that may no longer hold its database's lock fences its store
-/// ([`Store::fence`]): from that instant nothing it writes reaches the
-/// database (QA round four lock-01).
+/// ([`Store::fence`]): from that instant no new statement of its leaves for
+/// the database; what was under way on a connection in use is ended with
+/// the store's sessions ([`Store::end_own_sessions`]; QA round four
+/// lock-01, review of #98).
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: PgPool,
@@ -88,15 +90,29 @@ pub struct Store {
 /// ([`Store::end_own_sessions`]).
 pub const APPLICATION_NAME_PREFIX: &str = "kage ";
 
+/// What the pool's hook says of a connection it just opened: refused once
+/// the store is fenced, so that a connect under way at the fence carries
+/// no statement after it (review of #98).
+fn refuse_when_fenced(fenced: &AtomicBool) -> Result<(), sqlx::Error> {
+    if fenced.load(Ordering::SeqCst) {
+        Err(sqlx::Error::PoolClosed)
+    } else {
+        Ok(())
+    }
+}
+
 impl Store {
     /// Connects with the configured pool size and timeout.
     ///
     /// Every session of the store, and the server lock's, is named
     /// `kage <id>` with an id of this store's own (`application_name`),
     /// whatever the URL names, and keeps the lock's short TCP keepalives
-    /// ([`crate::KEEPALIVES`]): Postgres ends a session whose server
-    /// vanished without closing it about a minute after its last answer,
-    /// and nothing that server had sent on it runs later (review of #98).
+    /// and its TCP user timeout ([`crate::KEEPALIVES`]): Postgres ends a
+    /// session whose server vanished without closing it about a minute
+    /// after its last answer, whether the session was idle or had an
+    /// answer under way, and nothing that server had sent on it runs later
+    /// (review of #98). A connection that is opened once the store is
+    /// fenced is refused before any statement goes on it.
     ///
     /// # Errors
     ///
@@ -111,13 +127,22 @@ impl Store {
                 ("tcp_keepalives_idle", "30"),
                 ("tcp_keepalives_interval", "10"),
                 ("tcp_keepalives_count", "3"),
+                ("tcp_user_timeout", "60000"),
             ]);
+        let fenced = Arc::new(AtomicBool::new(false));
+        let hook = Arc::clone(&fenced);
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(config.connect_timeout.get())
+            // A connection the pool began to open before the fence came
+            // carries no statement once it is open (review of #98).
+            .after_connect(move |_, _| {
+                let opened = refuse_when_fenced(&hook);
+                Box::pin(async move { opened })
+            })
             .connect_with(options)
             .await?;
-        Ok(Self::from_pool(pool))
+        Ok(Self { pool, fenced })
     }
 
     /// Wraps an existing pool.
@@ -204,7 +229,9 @@ impl Store {
             .bind(&name)
             .fetch_one(&mut connection)
             .await?;
-            connection.close().await?;
+            // They are ended: a close the database does not answer
+            // changes nothing of that.
+            let _ = connection.close().await;
             Ok::<_, StoreError>(u64::try_from(ended).unwrap_or(0))
         };
         tokio::time::timeout(within, ending)
@@ -390,7 +417,21 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::{MigrationState, MigrationStatus};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::{MigrationState, MigrationStatus, refuse_when_fenced};
+
+    /// Review of #98: a connection opened after the fence is refused.
+    #[test]
+    fn a_connection_opened_after_the_fence_is_refused() {
+        let fenced = AtomicBool::new(false);
+        assert!(refuse_when_fenced(&fenced).is_ok());
+        fenced.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            refuse_when_fenced(&fenced),
+            Err(sqlx::Error::PoolClosed)
+        ));
+    }
 
     fn state(version: i64, applied: bool, checksum_matches: Option<bool>) -> MigrationState {
         MigrationState {

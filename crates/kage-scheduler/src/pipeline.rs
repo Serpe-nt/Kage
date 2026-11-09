@@ -2564,3 +2564,22 @@ fn pick_plain_exit(site: &str, exits: &[ProxyId]) -> Option<ProxyId> {
         .int_inclusive(0, last);
     sorted.get(usize::try_from(index).ok()?).copied()
 }
+
+#[cfg(test)]
+mod tests {
+    use kage_core::schedule::retry::Unmade;
+
+    use super::{CONTEXT_BUSY, CONTEXT_CONFLICT, STORE_UNAVAILABLE, unmade_by};
+
+    /// An attempt never made says why, and counts against nothing: a busy
+    /// context, one open with other parameters, a cookie jar the database
+    /// could not give (review of #98). Every other reason is an attempt.
+    #[test]
+    fn an_attempt_never_made_says_why() {
+        assert_eq!(unmade_by(Some(CONTEXT_BUSY)), Some(Unmade::Busy));
+        assert_eq!(unmade_by(Some(CONTEXT_CONFLICT)), Some(Unmade::Conflict));
+        assert_eq!(unmade_by(Some(STORE_UNAVAILABLE)), Some(Unmade::Store));
+        assert_eq!(unmade_by(Some("http_client")), None);
+        assert_eq!(unmade_by(None), None);
+    }
+}

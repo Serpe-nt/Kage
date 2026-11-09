@@ -22,9 +22,10 @@ groups:
       # then, whatever the database does (QA round four lock-03). The age is
       # taken at the scrape (timestamp() of the sample), not at the rule's
       # evaluation, so a slow scrape or evaluation never makes a healthy
-      # server's age look large; a scrape interval of 15 s (this profile's)
-      # always lands a scrape in the window between 30 s and the stop, a
-      # longer one may miss it. KageDown takes over once the server is gone.
+      # server's age look large; scrape and evaluation intervals of 15 s (this
+      # profile's) always land a scrape and an evaluation in the window between
+      # 30 s and the stop; longer ones may miss it. KageDown takes over once the
+      # server is gone.
       - alert: KageServerLockUnconfirmed
         expr: timestamp(kage_server_lock_confirmed_timestamp_seconds) - kage_server_lock_confirmed_timestamp_seconds > 30
         labels:

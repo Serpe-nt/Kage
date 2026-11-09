@@ -36,11 +36,28 @@ tests:
         values: '0+15x12'
       - series: 'kage_server_lock_confirmed_timestamp_seconds{job="kage",instance="cut:9464"}'
         values: '0 15 30 45 60 60 60 60 60 60'
+      # A healthy server whose every scrape lands 20 s after a confirmation
+      # (a look takes its time): never the alert.
+      - series: 'kage_server_lock_confirmed_timestamp_seconds{job="kage",instance="late-look:9464"}'
+        values: '-20+15x12'
+      # A healthy server scraped once a minute, at 15 s past it: the rule is
+      # evaluated 45 s after the last scrape. Its age is that of the sample
+      # (0 s), not the evaluation's (45 s): never the alert, where
+      # `time() - m > 35` fired.
+      - series: 'kage_server_lock_confirmed_timestamp_seconds{job="kage",instance="sparse:9464"}'
+        values: '_ 15 _ _ _ 75 _ _ _ 135 _ _ _'
     alert_rule_test:
       - eval_time: 1m
         alertname: KageServerLockUnconfirmed
         exp_alerts: []
       - eval_time: 2m
+        alertname: KageServerLockUnconfirmed
+        exp_alerts:
+          - exp_labels: { severity: critical, job: kage, instance: "cut:9464" }
+            exp_annotations:
+              summary: kage had not confirmed its database's lock for over 30 s when it was scraped; cut off from its database, it stops by itself
+              runbook: docs/runbooks/observability.md
+      - eval_time: 3m
         alertname: KageServerLockUnconfirmed
         exp_alerts:
           - exp_labels: { severity: critical, job: kage, instance: "cut:9464" }
