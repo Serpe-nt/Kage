@@ -78,6 +78,9 @@ export class InputGrant {
 
 const granted = new AsyncLocalStorage<InputGrant>();
 
+const revoked = (what: string) =>
+  new InputRevoked(`${what}: the step or request that asked for it has ended and acts no more`);
+
 /** The grant of the work running now; `null` outside any. */
 export function currentGrant(): InputGrant | null {
   return granted.getStore() ?? null;
@@ -103,7 +106,11 @@ export function childGrant(): InputGrant {
  * key down and key lending throw {@link InputRevoked} and never act; its
  * key up and button up let up only what it still holds itself (the
  * revocation let up the rest), so that a late release never cuts a press
- * of the next step on the same key. Work outside any grant acts as before.
+ * of the next step on the same key. Work outside any grant acts not at
+ * all: every legitimate act of the persona belongs to a request (review of
+ * #96). A press is held by its grant only once the display has it; one
+ * that arrives after its grant was revoked, which the revocation could
+ * not let up, is let up at once.
  */
 export class GatedInput implements InputDevice {
   constructor(readonly device: InputDevice) {}
@@ -112,12 +119,13 @@ export class GatedInput implements InputDevice {
     return this.device.screen;
   }
 
-  private allowed(what: string): InputGrant | null {
+  private allowed(what: string): InputGrant {
     const grant = currentGrant();
-    if (grant !== null && !grant.active) {
-      throw new InputRevoked(
-        `${what}: the step or request that asked for it has ended and acts no more`,
-      );
+    if (grant === null) {
+      throw new InputRevoked(`${what}: asked for outside any request, and refused`);
+    }
+    if (!grant.active) {
+      throw revoked(what);
     }
     return grant;
   }
@@ -133,9 +141,14 @@ export class GatedInput implements InputDevice {
 
   async buttonDown(button: PointerButton): Promise<void> {
     const grant = this.allowed('a button press');
-    grant?.buttonsDown.add(button);
-    grant?.pressedOn(this.device);
+    grant.pressedOn(this.device);
     await this.device.buttonDown(button);
+    if (!grant.active) {
+      // Revoked while the press was on its way: nothing let it up yet.
+      await this.device.buttonUp(button).catch(() => undefined);
+      throw revoked('a button press');
+    }
+    grant.buttonsDown.add(button);
   }
 
   async buttonUp(button: PointerButton): Promise<void> {
@@ -168,9 +181,15 @@ export class GatedInput implements InputDevice {
 
   async keyDown(key: string): Promise<void> {
     const grant = this.allowed(`a press of ${key}`);
-    grant?.keysDown.add(key);
-    grant?.pressedOn(this.device);
+    grant.pressedOn(this.device);
+    // The device may wait before the press goes out (a key it changes for
+    // the press first): a revocation meanwhile finds nothing to let up.
     await this.device.keyDown(key);
+    if (!grant.active) {
+      await this.device.keyUp(key).catch(() => undefined);
+      throw revoked(`a press of ${key}`);
+    }
+    grant.keysDown.add(key);
   }
 
   async keyUp(key: string): Promise<void> {

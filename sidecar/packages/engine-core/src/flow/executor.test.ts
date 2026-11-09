@@ -332,19 +332,75 @@ describe('the flow executor', () => {
         { action: 'select', selector: '#s', value: 'v' },
       ]),
     ).toBe(true);
-    expect(calls.filter((call) => !call.startsWith('waitForSelector'))).toEqual([
-      'driver.click #a 900',
-      `driver.hover #b ${DEFAULT_STEP_TIMEOUT_MS}`,
-      `driver.fill #q x ${DEFAULT_STEP_TIMEOUT_MS}`,
+    // A driver action gets what is left of its step's time after the wait
+    // for its element (review of #96): the step's budget, less the few
+    // milliseconds the wait took here, rounded up to the hundred.
+    const budget = (call: string) =>
+      call.replace(
+        /^(driver\.(?:click|hover|fill|select) .*) (\d+)$/,
+        (_, head: string, ms: string) => `${head} ~${String(Math.ceil(Number(ms) / 100) * 100)}`,
+      );
+    expect(calls.filter((call) => !call.startsWith('waitForSelector')).map(budget)).toEqual([
+      'driver.click #a ~900',
+      `driver.hover #b ~${DEFAULT_STEP_TIMEOUT_MS}`,
+      `driver.fill #q x ~${DEFAULT_STEP_TIMEOUT_MS}`,
       'driver.press Enter',
       'driver.scroll 1',
-      `driver.select #s v ${DEFAULT_STEP_TIMEOUT_MS}`,
+      `driver.select #s v ~${DEFAULT_STEP_TIMEOUT_MS}`,
       `back ${DEFAULT_STEP_TIMEOUT_MS}`,
       'human.click #s',
       'human.press ArrowUp',
       'human.press ArrowUp',
       'human.press Enter',
     ]);
+  });
+
+  it('gives a driver action only what is left of its step’s time after the wait for its element (review of #96)', async () => {
+    const given: number[] = [];
+    const base = rig().host;
+    const host: FlowHost = {
+      ...base,
+      waitForSelector: () => new Promise((resolve) => setTimeout(resolve, 300)),
+      driver: {
+        ...base.driver,
+        click: (_selector, timeout) => {
+          given.push(timeout);
+          return Promise.resolve();
+        },
+        hover: (_selector, timeout) => {
+          given.push(timeout);
+          return Promise.resolve();
+        },
+        fill: (_selector, _text, timeout) => {
+          given.push(timeout);
+          return Promise.resolve();
+        },
+        select: (_selector, _value, timeout) => {
+          given.push(timeout);
+          return Promise.resolve();
+        },
+      },
+    };
+    const outcome = await runFlow(
+      {
+        actions: [
+          { action: 'click', selector: '#a', human: false, timeout_ms: 1000 },
+          { action: 'hover', selector: '#a', human: false, timeout_ms: 1000 },
+          { action: 'type', selector: '#a', text: 'x', human: false, timeout_ms: 1000 },
+          { action: 'select', selector: '#a', value: 'v', human: false, timeout_ms: 1000 },
+        ],
+        capture,
+      },
+      host,
+      () => undefined,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(given).toHaveLength(4);
+    for (const timeout of given) {
+      // Never the whole budget again: what the 300 ms wait left of it.
+      expect(timeout).toBeLessThanOrEqual(1000 - 300 + 20);
+      expect(timeout).toBeGreaterThan(500);
+    }
   });
 
   it('waits for one condition, captures where asked, and checks what it is told to check', async () => {

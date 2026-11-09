@@ -22,6 +22,7 @@ import type {
 import {
   ConsoleLog,
   EngineError,
+  GatedInput,
   PageSession,
   X11Input,
   toBrowserCookieParam,
@@ -114,6 +115,29 @@ export function joinedHeaders(
     }
   }
   return lines;
+}
+
+/**
+ * The keyboard shortcut a person prints a page with, `Control` and `p`, on
+ * `device`: the gated device, so that it acts only for a step or request
+ * whose input grant is still active (QA round four input-01, the review of
+ * #96). `Control` is let up whatever happened to the `p`.
+ */
+export async function pressPrint(
+  device: InputDevice,
+  wait: (ms: number) => Promise<void> = sleep,
+): Promise<void> {
+  await device.keyDown('Control');
+  try {
+    await wait(60);
+    await device.keyDown('p');
+    await wait(70);
+    await device.keyUp('p');
+    await wait(40);
+  } finally {
+    await device.keyUp('Control');
+  }
+  await device.flush();
 }
 
 /** What the engine hands over when a context is open. */
@@ -305,15 +329,9 @@ export class FirefoxContext implements EngineContext, SessionDriver {
   async pdf(): Promise<{ data: Buffer; sideEffects: SideEffect[] }> {
     const { pdfPath } = this.parts;
     await rm(pdfPath, { force: true });
-    const device = await this.device();
-    await device.keyDown('Control');
-    await sleep(60);
-    await device.keyDown('p');
-    await sleep(70);
-    await device.keyUp('p');
-    await sleep(40);
-    await device.keyUp('Control');
-    await device.flush();
+    // Through the gate, as every key of the persona's: a `pdf` step whose
+    // time ran out presses nothing once its grant is revoked (review of #96).
+    await pressPrint(new GatedInput(await this.device()));
     let size = -1;
     for (let waited = 0; waited < PRINT_TIMEOUT_MS; waited += 200) {
       await sleep(200);

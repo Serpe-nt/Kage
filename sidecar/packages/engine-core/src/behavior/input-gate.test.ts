@@ -39,11 +39,20 @@ function recording(): { acts: string[]; device: InputDevice } {
 const later = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('the input gate (QA round four, input-01)', () => {
-  it('acts for work outside any grant, and for work whose grant is active', async () => {
+  it('acts for work whose grant is active, and for no work outside any grant', async () => {
     const { acts, device } = recording();
     const gated = new GatedInput(device);
     expect(currentGrant()).toBeNull();
-    await gated.pointerMove(1, 1);
+    // Every legitimate act belongs to a request (review of #96).
+    for (const act of [
+      () => gated.pointerMove(1, 1),
+      () => gated.buttonDown('left'),
+      () => gated.wheelNotch('down'),
+      () => gated.prepare('a'),
+      () => gated.keyDown('a'),
+    ]) {
+      await expect(act()).rejects.toBeInstanceOf(InputRevoked);
+    }
     await withInputGrant(new InputGrant(), async () => {
       await gated.pointerMove(2, 2);
       await gated.buttonDown('left');
@@ -57,7 +66,6 @@ describe('the input gate (QA round four, input-01)', () => {
     });
     await gated.close();
     expect(acts).toEqual([
-      'move 1,1',
       'move 2,2',
       'button down left',
       'button up left',
@@ -121,6 +129,63 @@ describe('the input gate (QA round four, input-01)', () => {
     const idle = new InputGrant();
     await idle.revoke();
     expect(acts).toHaveLength(4);
+  });
+
+  it('lets up at once a press that reached the display after its grant was revoked', async () => {
+    // The X11 device may wait before a press goes out (a key it changes
+    // first): a revocation in that window found nothing to let up, and the
+    // work's own release would be refused (review of #96).
+    const { acts, device } = recording();
+    let pressed: () => void = () => undefined;
+    const slow: InputDevice = {
+      ...device,
+      keyDown: (key) =>
+        new Promise<void>((resolve) => {
+          pressed = () => {
+            acts.push(`key down ${key}`);
+            resolve();
+          };
+        }),
+      buttonDown: (button) =>
+        new Promise<void>((resolve) => {
+          pressed = () => {
+            acts.push(`button down ${button}`);
+            resolve();
+          };
+        }),
+    };
+    const gated = new GatedInput(slow);
+    for (const [press, release] of [
+      [() => gated.keyDown('q'), 'key up q'],
+      [() => gated.buttonDown('left'), 'button up left'],
+    ] as const) {
+      const grant = new InputGrant();
+      const pressing = withInputGrant(grant, press);
+      await later(5);
+      await grant.revoke();
+      pressed();
+      await expect(pressing).rejects.toBeInstanceOf(InputRevoked);
+      expect(acts.slice(-2)).toEqual([release.replace(' up ', ' down '), release]);
+      expect(grant.keysDown.size + grant.buttonsDown.size).toBe(0);
+    }
+  });
+
+  it('holds nothing a device refused to press', async () => {
+    const { acts, device } = recording();
+    const refusing: InputDevice = {
+      ...device,
+      keyDown: () => Promise.reject(new Error('the display refused the key')),
+      buttonDown: () => Promise.reject(new Error('the display refused the button')),
+    };
+    const gated = new GatedInput(refusing);
+    const grant = new InputGrant();
+    await withInputGrant(grant, async () => {
+      await expect(gated.keyDown('x')).rejects.toThrow('refused the key');
+      await expect(gated.buttonDown('right')).rejects.toThrow('refused the button');
+    });
+    expect(grant.keysDown.size + grant.buttonsDown.size).toBe(0);
+    await grant.revoke();
+    expect(acts).toEqual([]);
   });
 
   it('goes with everything the work started, however late it runs', async () => {

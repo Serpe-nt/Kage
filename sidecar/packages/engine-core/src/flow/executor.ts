@@ -283,6 +283,11 @@ async function perform(
   signal: AbortSignal,
 ): Promise<Performed> {
   const humanly = action.human ?? true;
+  // What is left of the step's time: a driver action after the wait for its
+  // element gets no more than that, so it ends with the step's budget and
+  // never acts on the flow's page after the flow returned (review of #96).
+  const until = Date.now() + timeout;
+  const left = () => Math.max(1, until - Date.now());
   switch (action.action) {
     case 'goto':
       await host.goto(action.url, timeout);
@@ -295,11 +300,9 @@ async function perform(
         return leaving(host, NAVIGATION_WATCH_MS, () => human.click(action.selector));
       }
       if (paced) {
-        return leaving(host, NAVIGATION_WATCH_MS, () =>
-          host.driver.click(action.selector, timeout),
-        );
+        return leaving(host, NAVIGATION_WATCH_MS, () => host.driver.click(action.selector, left()));
       }
-      await host.driver.click(action.selector, timeout);
+      await host.driver.click(action.selector, left());
       return stayed;
     }
     case 'hover':
@@ -307,7 +310,7 @@ async function perform(
       if (humanly) {
         await (await host.human()).hover(action.selector);
       } else {
-        await host.driver.hover(action.selector, timeout);
+        await host.driver.hover(action.selector, left());
       }
       return stayed;
     case 'type':
@@ -325,7 +328,7 @@ async function perform(
         }
         await human.type(action.text, { typos: host.typos, signal });
       } else {
-        await host.driver.fill(action.selector, action.text, timeout);
+        await host.driver.fill(action.selector, action.text, left());
       }
       return stayed;
     case 'press': {
@@ -353,7 +356,7 @@ async function perform(
       if (humanly) {
         await selectByKeyboard(host, await host.human(), action.selector, action.value, signal);
       } else {
-        await host.driver.select(action.selector, action.value, timeout);
+        await host.driver.select(action.selector, action.value, left());
       }
       return stayed;
     case 'back': {
