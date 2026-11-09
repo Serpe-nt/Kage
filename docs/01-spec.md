@@ -1725,11 +1725,26 @@ that, every key down comes up, and only the keys lent for its own text
 are given back. The step reports its failure once that is done, so a
 step whose time ran out reports up to about 1.25 s past its budget (a
 quarter of a second's grace, then up to a second for the work to stop).
-Work that has not stopped by then (a hand still reaching its element) is
-written to the sidecar's log, and the flow goes on without it: typing
-that would begin after the budget ran out types nothing. Up to 2.0.4 a
-`type` typed on after the flow had returned, into the page of whatever
-the context did next, and over a retry's own keys. A `press` of a character the layout
+Then, at the latest, the step's input ends, whatever kind of step it is
+and whatever it is still doing: every step runs with an input grant of
+its own, and every request with one around its steps, which the sidecar
+revokes when the step ends (once its grace is over) and when the request
+returns. Every act of the persona's mouse and keyboard (a pointer move, a
+button, a wheel notch, a key, a keyboard lent for a text) checks the grant
+of the work that asks for it, carried with that work however late it
+runs, and a revoked one's act throws before it acts: what the step still
+held down is let up at the revocation, and nothing of it reaches the
+display afterwards, in the flow's page or in the page of the persona's
+next request, another key's least of all (§16.5). A human `select` also
+stops before its next key once its budget is over, its `Enter` included.
+Work that had not stopped within the grace (a hand still reaching its
+element) is written to the sidecar's log, and the flow goes on; the work
+does nothing more. Up to 2.0.4 a `type` typed on after the flow had
+returned, into the page of whatever the context did next, and over a
+retry's own keys; until QA round four's input-01 a `select` went on
+pressing its arrows for as many options as it had to cross, into the next
+request's tab, another key's, and its `Enter` submitted that page's form,
+in both engines. A `press` of a character the layout
 makes with a dead key, or has no key for, is typed as `type` types it
 (§10.4). A human
 step is done by the behavior engine through the display: a `select` is
@@ -1786,7 +1801,9 @@ blank page a tab begins with, nor on the browser's error page: the step
 fails at once where the browser can say so beforehand), and a step that
 reads the tab before the flow's own first navigation reads a blank one;
 nothing a request left in the tab reaches another request, another key's
-least of all (§16.5). One exception, Kage's own: a crawl's pages name their
+least of all (§16.5), and nor does the persona's input: no move, button,
+wheel notch or key of a request reaches the display once it returned (its
+input grant is revoked, see the steps above; QA round four, input-01). One exception, Kage's own: a crawl's pages name their
 job as their tab (contract 1.7.0, `tab`) and share it, so that the next page
 is reached by a click on the page before (§13); a navigation of another
 name, or of none, replaces the tab first. A fresh tab is a new tab of the

@@ -1101,6 +1101,40 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(values('date')[0]).toMatch(/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} /);
     });
 
+    it('lets nothing of a flow’s step that ran out of time reach the next request’s page (QA round four, input-01)', async () => {
+      await withContext('stray-input', async (context) => {
+        // A human select of option 150 of 300 with a budget far too short
+        // for the walk: the step fails, and the flow ends.
+        const run = await flow(context, {
+          actions: [
+            { action: 'goto', url: named('/input/keys?options=300') },
+            { action: 'select', selector: '#s', value: 'option 150', timeout_ms: 3000 },
+          ],
+        });
+        expect(run.final.ok).toBe(false);
+        expect(run.steps.at(-1)).toMatchObject({
+          action: 'select',
+          ok: false,
+          error: 'select did not finish within 3000 ms',
+        });
+        // The next request, right after, in a fresh tab of the same window:
+        // a page whose input has the focus, so that a stray Enter would
+        // submit its form. It hears nothing of the select.
+        const next = await go(context, named('/input/keys?focus=1'), {
+          capture: DOM,
+          dwell_ms: 8000,
+          behavior: { seed: SEEDS.first, mode: 'still', entry: { strategy: 'direct' } },
+        });
+        const counted = (id: string) =>
+          new RegExp(`<pre id="${id}">(\\d+)</pre>`).exec(next.dom_html ?? '')?.[1] ?? null;
+        expect({
+          keys: counted('keys'),
+          mouse: counted('mouse'),
+          submitted: counted('sub'),
+        }).toEqual({ keys: '0', mouse: '0', submitted: '0' });
+      });
+    });
+
     it('reports a page the browser revalidated as the page it shows: the kept status and head (F178)', async () => {
       await site.reset();
       const address = named('/cached/revalidated?id=parity');

@@ -9,7 +9,7 @@ import type {
   ScreenshotOptions,
 } from '@kage/contract';
 
-import type { Human } from '../behavior/index.js';
+import { childGrant, withInputGrant, type Human } from '../behavior/index.js';
 import type { EngineLog } from '../engine.js';
 
 /** Default budget of one step (spec §10.5). */
@@ -137,9 +137,16 @@ const STOP_GRACE_MS = 1000;
  * Ends work that outlives its budget. The grace lets a step report its
  * own, better worded, timeout first. Once the budget is over the work's
  * signal is aborted, and the work is waited for until it stopped (for
- * `STOP_GRACE_MS` at most): a step whose budget ran out does nothing more
- * once the flow has moved on (a `type` typed on into the next request's
- * tab, and over a retry's own keys).
+ * `STOP_GRACE_MS` at most).
+ *
+ * The work runs with an input grant of its own (QA round four, input-01),
+ * revoked when the step ends: at once when it finished, after the grace
+ * when it ran out of time. From then on nothing it does reaches the
+ * display, whatever it is doing: a press, a move, a button or a wheel
+ * notch of it throws before it acts, and what it still held down is let
+ * up. So a step whose budget ran out does nothing more once the flow has
+ * moved on, in the flow's page or in the next request's tab (a `select`
+ * pressed its arrows on into another key's page and submitted its form).
  */
 async function withTimeout<T>(
   work: (signal: AbortSignal) => Promise<T>,
@@ -149,7 +156,8 @@ async function withTimeout<T>(
   log: EngineLog,
 ): Promise<T> {
   const stop = new AbortController();
-  const running = work(stop.signal);
+  const grant = childGrant();
+  const running = withInputGrant(grant, () => work(stop.signal));
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<'late'>((resolve) => {
     timer = setTimeout(() => {
@@ -157,31 +165,35 @@ async function withTimeout<T>(
     }, ms + graceMs);
   });
   try {
-    const first = await Promise.race([running.then((value) => ({ value })), late]);
-    if (first !== 'late') {
-      return first.value;
+    try {
+      const first = await Promise.race([running.then((value) => ({ value })), late]);
+      if (first !== 'late') {
+        return first.value;
+      }
+    } finally {
+      clearTimeout(timer);
     }
+    stop.abort();
+    const stopped = await Promise.race([
+      running.then(
+        () => true,
+        () => true,
+      ),
+      sleep(STOP_GRACE_MS).then(() => false),
+    ]);
+    if (!stopped) {
+      // Work that does not watch the signal at every act (a hand still
+      // reaching its element). Its grant is revoked below: whatever it
+      // does from now on reaches no page.
+      log.warn(
+        { step: what, budget_ms: ms, grace_ms: STOP_GRACE_MS },
+        'a step whose budget ran out had not stopped after the grace; its input is revoked and the flow goes on without it',
+      );
+    }
+    throw new FlowStepError(`${what} did not finish within ${ms} ms`);
   } finally {
-    clearTimeout(timer);
+    await grant.revoke();
   }
-  stop.abort();
-  const stopped = await Promise.race([
-    running.then(
-      () => true,
-      () => true,
-    ),
-    sleep(STOP_GRACE_MS).then(() => false),
-  ]);
-  if (!stopped) {
-    // Rare: work that does not watch the signal (a hand still reaching
-    // its element). Typing that begins after this types nothing, and
-    // touches no other typing's keys.
-    log.warn(
-      { step: what, budget_ms: ms, grace_ms: STOP_GRACE_MS },
-      'a step whose budget ran out had not stopped after the grace; the flow goes on without it',
-    );
-  }
-  throw new FlowStepError(`${what} did not finish within ${ms} ms`);
 }
 
 /** Waits until a selector matches, looking again every little while. */
@@ -196,14 +208,22 @@ async function waitUntilExists(host: FlowHost, selector: string, timeoutMs: numb
 /**
  * Chooses an option of a select element the way a person without a mouse
  * on the list does: a click to open it, the arrow keys to the option,
- * `Enter`. The browser fires its own `input` and `change` events.
+ * `Enter`. The browser fires its own `input` and `change` events. It stops
+ * before the next key once `signal` is aborted, the `Enter` included (QA
+ * round four, input-01): a long list is many keys.
  */
 async function selectByKeyboard(
   host: FlowHost,
   human: Human,
   selector: string,
   value: string,
+  signal: AbortSignal,
 ): Promise<void> {
+  const stopIfOver = () => {
+    if (signal.aborted) {
+      throw new FlowStepError('the budget of the step ran out before the option was reached');
+    }
+  };
   const state = await host.selectState(selector, value);
   if (state === null) {
     throw new FlowStepError(`${selector} is not a select element`);
@@ -211,13 +231,16 @@ async function selectByKeyboard(
   if (state.wanted < 0) {
     throw new FlowStepError(`${selector} has no option with the value ${JSON.stringify(value)}`);
   }
+  stopIfOver();
   await human.click(selector);
   // The click may have opened a tab: the keys are for the flow's page (F184).
   await host.keepFront();
   const steps = state.wanted - state.index;
   for (let step = 0; step < Math.abs(steps); step += 1) {
+    stopIfOver();
     await human.press(steps > 0 ? 'ArrowDown' : 'ArrowUp');
   }
+  stopIfOver();
   await human.press('Enter');
 }
 
@@ -328,7 +351,7 @@ async function perform(
     case 'select':
       await waitUntilExists(host, action.selector, timeout);
       if (humanly) {
-        await selectByKeyboard(host, await host.human(), action.selector, action.value);
+        await selectByKeyboard(host, await host.human(), action.selector, action.value, signal);
       } else {
         await host.driver.select(action.selector, action.value, timeout);
       }
