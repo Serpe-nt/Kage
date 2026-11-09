@@ -108,18 +108,7 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
         .context("cannot read the migration state")?;
     migrate::ensure_clean(&status)?;
     // One server per database, before anything is started (F174).
-    let lock = ServerLock::take(store.pool())
-        .await
-        .context("cannot take the database's server lock")?
-        .ok_or_else(|| anyhow::anyhow!(ANOTHER_SERVER))?;
-    let (lost, lock_lost) = watch::channel(None);
-    let keeper = tokio::spawn(keep_the_lock(
-        StoreLock {
-            store: store.clone(),
-            lock,
-        },
-        lost,
-    ));
+    let (keeper, lock_lost, ending) = hold_the_lock(&store).await?;
 
     let (alerts, recorder) = alerts::recorder(store.clone());
     let policies = Arc::new(
@@ -215,13 +204,44 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
     recorder.abort();
     // Last: the lock goes with its connection.
     keeper.abort();
-    ended(&store, served).await
+    ended(&store, served, &ending).await
+}
+
+/// Takes the database's server lock and starts its keeper: the keeper's
+/// task, what it says when the lock is lost, and the task that ends the
+/// server's sessions once it fenced the store.
+async fn hold_the_lock(
+    store: &Store,
+) -> anyhow::Result<(
+    tokio::task::JoinHandle<()>,
+    watch::Receiver<Option<LockLoss>>,
+    Ending,
+)> {
+    let lock = ServerLock::take(store.pool())
+        .await
+        .context("cannot take the database's server lock")?
+        .ok_or_else(|| anyhow::anyhow!(ANOTHER_SERVER))?;
+    let (lost, lock_lost) = watch::channel(None);
+    let ending = Ending::default();
+    let keeper = tokio::spawn(keep_the_lock(
+        StoreLock {
+            store: store.clone(),
+            lock,
+            ending: Arc::clone(&ending),
+        },
+        lost,
+    ));
+    Ok((keeper, lock_lost, ending))
 }
 
 /// What `serve` comes to once everything it started stopped: the store is
 /// closed, or, for a server that stopped for its database's lock, its
 /// sessions in the database are ended and the error says why it stopped.
-async fn ended(store: &Store, served: anyhow::Result<Option<LockLoss>>) -> anyhow::Result<()> {
+async fn ended(
+    store: &Store,
+    served: anyhow::Result<Option<LockLoss>>,
+    ending: &Ending,
+) -> anyhow::Result<()> {
     let lost = match served {
         Ok(lost) => lost,
         Err(error) => {
@@ -241,7 +261,7 @@ async fn ended(store: &Store, served: anyhow::Result<Option<LockLoss>>) -> anyho
     // connection of its own when the database can be reached, so that the
     // lock is free at once and nothing of this server's runs after it
     // (QA round four lock-02).
-    let ending = store.end_own_sessions(OWN_SESSIONS_WITHIN).await;
+    let ending = end_sessions_on_the_way_out(store, ending).await;
     match &ending {
         Ok(ended) => tracing::info!(
             sessions = ended,
@@ -270,8 +290,10 @@ trait HeldLock {
     /// that still holds it is ended first. False when another server
     /// holds it now.
     fn take_again(&mut self) -> impl Future<Output = Result<bool, kage_store::StoreError>> + Send;
-    /// Fences the server's store: nothing it writes reaches the database
-    /// from now on (QA round four lock-01).
+    /// Fences the server's store: no new statement of its leaves for the
+    /// database from now on, and its sessions there are ended as soon as
+    /// the database answers, which rolls back what was under way (QA round
+    /// four lock-01, review of #98).
     fn fence(&self);
 }
 
@@ -279,6 +301,7 @@ trait HeldLock {
 struct StoreLock {
     store: Store,
     lock: ServerLock,
+    ending: Ending,
 }
 
 impl HeldLock for StoreLock {
@@ -299,19 +322,38 @@ impl HeldLock for StoreLock {
     }
 
     fn fence(&self) {
-        self.store.fence();
-        // A transaction already under way on a connection in use when the
-        // fence came would still commit: the server ends its own sessions,
-        // which rolls it back, as soon as the database answers: at once
-        // when another server took the lock (review of #98).
-        tokio::spawn(end_own_sessions_soon(self.store.clone()));
+        fence_store(&self.store, &self.ending);
+    }
+}
+
+/// The task that ends a fenced server's sessions in the database, once the
+/// fence started it: [`ended`] waits for it, or stops it before it ends
+/// them itself, so that the two never end each other's connection
+/// (review of #98).
+type Ending = Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<SessionsEnded>>>>;
+
+/// What ending a store's sessions came to.
+type SessionsEnded = Result<u64, kage_store::StoreError>;
+
+/// Fences `store`, and starts ending its sessions in the database: a
+/// transaction already under way on a connection in use when the fence
+/// came would still commit, and ending its session rolls it back, as soon
+/// as the database answers: at once when another server took the lock
+/// (review of #98).
+fn fence_store(store: &Store, ending: &Ending) {
+    store.fence();
+    let mut slot = ending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot.is_none() {
+        *slot = Some(tokio::spawn(end_own_sessions_soon(store.clone())));
     }
 }
 
 /// Ends the sessions of a fenced store in the database, looking again
-/// every second while the database cannot be reached, until it could or
-/// the process ends.
-async fn end_own_sessions_soon(store: Store) {
+/// every second while the database cannot be reached, until it could, it
+/// refused, or the process ends.
+async fn end_own_sessions_soon(store: Store) -> SessionsEnded {
     loop {
         match store.end_own_sessions(OWN_SESSIONS_WITHIN).await {
             Ok(ended) => {
@@ -320,17 +362,35 @@ async fn end_own_sessions_soon(store: Store) {
                     "this server's sessions in the database were ended: nothing it had under \
                      way there runs on"
                 );
-                return;
+                return Ok(ended);
             }
             Err(error) if error.is_connection() => {
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
             Err(error) => {
                 tracing::warn!(%error, "this server's sessions in the database cannot be ended");
-                return;
+                return Err(error);
             }
         }
     }
+}
+
+/// Ends a fenced store's sessions on the server's way out: the task the
+/// fence started, when it ends within [`OWN_SESSIONS_WITHIN`]; else that
+/// task is stopped first, and they are ended once more here.
+async fn end_sessions_on_the_way_out(store: &Store, ending: &Ending) -> SessionsEnded {
+    let started = ending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(mut task) = started {
+        if let Ok(Ok(ended)) = tokio::time::timeout(OWN_SESSIONS_WITHIN, &mut task).await {
+            return ended;
+        }
+        task.abort();
+        let _ = task.await;
+    }
+    store.end_own_sessions(OWN_SESSIONS_WITHIN).await
 }
 
 /// Why a server stops for its database's lock.
@@ -361,9 +421,10 @@ pub(crate) enum OwnSessions {
     Ended,
     /// The database could not be reached on the way out.
     Unreachable,
-    /// The database answered and refused to end them (a role without the
-    /// right to end its own sessions).
-    Refused,
+    /// They could not be ended for another reason than a database out of
+    /// reach: the database refused (a role without the right to end its
+    /// own sessions), or the sessions carry no name of their own.
+    NotEnded,
 }
 
 impl OwnSessions {
@@ -372,7 +433,7 @@ impl OwnSessions {
         match ended {
             Ok(_) => Self::Ended,
             Err(error) if error.is_connection() => Self::Unreachable,
-            Err(_) => Self::Refused,
+            Err(_) => Self::NotEnded,
         }
     }
 
@@ -386,8 +447,8 @@ impl OwnSessions {
                 "The database could not be reached on the way out: until Postgres lets the lock \
                  go, a server started is refused as if another one ran"
             }
-            Self::Refused => {
-                "The database refused to end its sessions on the way out (see the log): until \
+            Self::NotEnded => {
+                "Its sessions in the database could not be ended on the way out (see the log): until \
                  Postgres lets the lock go, a server started is refused as if another one ran"
             }
         }
@@ -1466,10 +1527,13 @@ mod lock_tests {
         // Review of #98: a refusal is not a database out of reach.
         let refused = LockUnconfirmed {
             after: Duration::from_secs(50),
-            sessions: OwnSessions::Refused,
+            sessions: OwnSessions::NotEnded,
         }
         .to_string();
-        assert!(refused.contains("refused to end its sessions"), "{refused}");
+        assert!(
+            refused.contains("could not be ended on the way out"),
+            "{refused}"
+        );
         assert!(
             !refused.contains("could not be reached on the way out"),
             "{refused}"
@@ -1489,7 +1553,7 @@ mod lock_tests {
         );
         assert_eq!(
             OwnSessions::of(&Err(StoreError::Unnamed)),
-            OwnSessions::Refused
+            OwnSessions::NotEnded
         );
         assert_eq!(OwnSessions::of(&Ok(2)), OwnSessions::Ended);
         let unreachable = LockUnconfirmed {
@@ -1506,5 +1570,65 @@ mod lock_tests {
             "{unreachable}"
         );
         assert!(unreachable.ends_with("(exit code 75)"), "{unreachable}");
+    }
+
+    /// Review of #98: both stops for the lock, and only they, exit within
+    /// the bound.
+    #[test]
+    fn only_a_stop_for_the_lock_is_one() {
+        let unconfirmed = anyhow::Error::from(LockUnconfirmed {
+            after: Duration::from_secs(50),
+            sessions: OwnSessions::Ended,
+        });
+        let taken = anyhow::Error::from(LockTaken {
+            sessions: OwnSessions::Unreachable,
+        });
+        assert!(super::stopped_for_the_lock(&unconfirmed));
+        assert!(super::stopped_for_the_lock(&taken));
+        assert!(!super::stopped_for_the_lock(&anyhow::anyhow!(
+            super::ANOTHER_SERVER
+        )));
+    }
+
+    /// Review of #98: the fence starts ending the server's sessions, once,
+    /// and the way out waits for that task within its bound, or stops it
+    /// before it ends them itself: here the database cannot be reached, and
+    /// the way out says so.
+    #[tokio::test]
+    async fn the_fence_starts_ending_the_sessions_and_the_way_out_takes_that_task_over() {
+        // Named as a server's store is; nothing listens on its port.
+        let options = "postgres://kage@127.0.0.1:1/kage"
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .unwrap()
+            .application_name("kage test");
+        let pool = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(options);
+        let store = kage_store::Store::from_pool(pool);
+        let ending = super::Ending::default();
+        super::fence_store(&store, &ending);
+        assert!(store.fenced());
+        assert!(ending.lock().unwrap().is_some());
+        // A second fence starts no second task.
+        let first = ending
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(tokio::task::JoinHandle::id);
+        super::fence_store(&store, &ending);
+        let second = ending
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(tokio::task::JoinHandle::id);
+        assert_eq!(first, second);
+
+        let asked = std::time::Instant::now();
+        let ended = super::end_sessions_on_the_way_out(&store, &ending).await;
+        assert!(ending.lock().unwrap().is_none());
+        assert_eq!(OwnSessions::of(&ended), OwnSessions::Unreachable);
+        assert!(
+            asked.elapsed() < super::OWN_SESSIONS_WITHIN * 3,
+            "{:?}",
+            asked.elapsed()
+        );
     }
 }

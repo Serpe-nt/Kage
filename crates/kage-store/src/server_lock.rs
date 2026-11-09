@@ -21,17 +21,22 @@ use std::time::Duration;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 
 use crate::StoreError;
+use crate::store::APPLICATION_NAME_PREFIX;
 
 /// The key of the advisory lock a server holds on its database: the bytes
-/// of `kageserv`. Nothing else in Kage takes an advisory lock.
+/// of `kageserv`. No other advisory lock of Kage's has this key (the
+/// proxies' and the artifacts' are transaction locks of keys of their own).
 pub const SERVER_LOCK: i64 = 0x6b61_6765_7365_7276;
 
 /// The TCP keepalives of the lock's session: after 30 s of silence
 /// Postgres asks whether the server is still there, every 10 s, and gives
 /// the connection up, and the lock with it, after 3 questions without an
-/// answer.
+/// answer. Keepalives are not sent while an answer of Postgres's waits to
+/// be acknowledged: the TCP user timeout gives the connection up when what
+/// Postgres sent has waited 60 s for an acknowledgement (review of #98).
 pub const KEEPALIVES: &str = "SET tcp_keepalives_idle = 30; \
-     SET tcp_keepalives_interval = 10; SET tcp_keepalives_count = 3";
+     SET tcp_keepalives_interval = 10; SET tcp_keepalives_count = 3; \
+     SET tcp_user_timeout = 60000";
 
 /// The session that holds [`SERVER_LOCK`] on this database, when one does,
 /// and its `application_name`. An advisory lock is a database's: a server
@@ -91,17 +96,23 @@ impl ServerLock {
     /// reachable again (QA round four lock-04). A session is ours when it
     /// carries the pool's own `application_name` (`kage <id>`, of this
     /// process alone), whatever its backend: a session an earlier take of
-    /// this process left behind holds the lock under another number. Only
-    /// a pool whose sessions carry no name of their own (a test's) goes by
-    /// the backend `ours`. `None` when another session holds the lock:
-    /// another server took it.
+    /// this process left behind holds the lock under another number. It is
+    /// ended by its backend and its name together, so that a backend number
+    /// that Postgres gave to another session since is never ended. Only a
+    /// pool whose sessions carry no name of a server's (a test's) goes by
+    /// the backend `ours`. A holder whose name cannot be read (it is
+    /// leaving) is looked at again. `None` when another session holds the
+    /// lock: another server took it.
     ///
     /// # Errors
     ///
     /// Fails when the database cannot be reached.
     pub async fn take_back(pool: &PgPool, ours: i32) -> Result<Option<Self>, StoreError> {
         let options = pool.connect_options();
-        let name = options.get_application_name().map(str::to_owned);
+        let name = options
+            .get_application_name()
+            .filter(|name| name.starts_with(APPLICATION_NAME_PREFIX))
+            .map(str::to_owned);
         let mut connection = PgConnection::connect_with(&options).await?;
         connection.execute(KEEPALIVES).await?;
         let mut ended = None;
@@ -110,21 +121,29 @@ impl ServerLock {
                 .bind(SERVER_LOCK)
                 .fetch_optional(&mut connection)
                 .await?;
-            let mine = |(pid, holder_name): &(i32, Option<String>)| match &name {
-                Some(name) => holder_name.as_deref() == Some(name.as_str()),
-                None => *pid == ours,
+            // Whether the holder is this process's own session; `None`
+            // while that cannot be told (its name is gone as it leaves).
+            let mine = |(pid, holder_name): &(i32, Option<String>)| match (&name, holder_name) {
+                (Some(name), Some(holder_name)) => Some(holder_name == name),
+                (Some(_), None) => None,
+                (None, _) => Some(*pid == ours),
             };
-            match holder {
-                Some(holder) if !mine(&holder) => {
+            match holder.as_ref().map(|holder| (holder.0, mine(holder))) {
+                Some((_, Some(false))) => {
                     connection.close().await?;
                     return Ok(None);
                 }
-                Some((pid, _)) if ended != Some(pid) => {
-                    // This server's own session: ended by its backend.
-                    let _: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
-                        .bind(pid)
-                        .fetch_one(&mut connection)
-                        .await?;
+                Some((pid, Some(true))) if ended != Some(pid) => {
+                    // This server's own session: ended by its backend and
+                    // its name, in one statement.
+                    let _: Option<bool> = sqlx::query_scalar(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                         WHERE pid = $1 AND application_name IS NOT DISTINCT FROM $2",
+                    )
+                    .bind(pid)
+                    .bind(name.as_deref())
+                    .fetch_optional(&mut connection)
+                    .await?;
                     ended = Some(pid);
                 }
                 Some(_) => {}

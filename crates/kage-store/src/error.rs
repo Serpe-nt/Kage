@@ -95,15 +95,18 @@ impl StoreError {
 }
 
 /// Whether a SQLSTATE says that the database cannot run the statement now:
-/// class 08 (connection exception), 53 (insufficient resources), 57P01 to
-/// 57P05 (an administrator, a crash or an idle timeout ended the session),
+/// class 08 (connection exception), 53 (insufficient resources) but for
+/// 53100 (a full disk stays full: an item that waited for it would ask its
+/// site again every minute until it may wait no longer), 57P01 to 57P05
+/// (an administrator, a crash or an idle timeout ended the session), 25006
+/// (a read-only server: a standby that a failover has not promoted yet),
 /// 40001 (serialization failure) and 40P01 (deadlock).
 fn transient_sqlstate(code: &str) -> bool {
     code.starts_with("08")
-        || code.starts_with("53")
+        || (code.starts_with("53") && code != "53100")
         || matches!(
             code,
-            "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "40001" | "40P01"
+            "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "25006" | "40001" | "40P01"
         )
 }
 
@@ -149,6 +152,9 @@ mod tests {
             ("08006", true),
             ("08P01", true),
             ("53300", true),
+            ("53200", true),
+            ("53100", false),
+            ("25006", true),
             ("57P01", true),
             ("57P03", true),
             ("40001", true),

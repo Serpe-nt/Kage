@@ -1291,10 +1291,13 @@ path that go into the browser before the page included); an attempt
 that still ends refused
 either way asked the site nothing, spends no retry, is no page of the persona's day on the
 site and gives a breaker's trial back, up to three such attempts per
-request, after which they count as failures. After `context_busy` the
-persona takes the next attempt, which waits again; after
-`context_conflict`, which a second open answers the same at once, the
-next attempt goes to another persona. A context still busy at the third
+request, after which they count as failures. So does an attempt whose
+persona's cookie jar could not be read because the database could not
+be reached (`store_unavailable`, an attempt of the http path that asked
+the site nothing; review of #98). After `context_busy` and
+`store_unavailable` the persona takes the next attempt, which waits
+again; after `context_conflict`, which a second open answers the same at
+once, the next attempt goes to another persona. A context still busy at the third
 such attempt runs something that may not end soon (the sidecar refuses
 to close a busy context): its persona is held from other work as after a
 flow's cancel (§16.6), until the context runs nothing or the attempt's
@@ -3244,16 +3247,21 @@ database cannot be reached. It then cuts the pages under way at once
 exits, with code 75 when no other server was seen, within 20 s of its
 decision (10 s for what runs to end, 5 s for the browsers, 3 s for its
 sessions, 2 s for its last traces). Postgres gives a silent session's
-lock up about a minute after its last answer, and every session of the
-server keeps the same short keepalives, so the server has stopped
-sending new writes before another could take the lock, and Postgres ends
-whatever of it still lives no later than it lets the lock go; the jobs it
+lock up about a minute after its last answer, so the server has stopped
+sending new writes before another could take the lock. Every session of
+the server keeps the lock's short keepalives (an idle session) and a
+60 s TCP user timeout (one with an answer of Postgres's that waits to be
+acknowledged, which keepalives do not cover), so Postgres ends whatever
+of it the network cut off about a minute after it last answered, as it
+does the lock's own session; the jobs it
 held are claimed again once their leases run out (QA round three's
 lock-02; QA round four lock-01: a server went on writing for 8 to 60 s
 after its decision, its items `failed` `internal`, its jobs `failed`,
 and a claim and persona writes after a second server had taken the
-lock). On its way out it ends its sessions once more when the database
-can be reached, and says whether it could: the lock is then free at once
+lock). On its way out it waits up to 3 s for that ending, or else stops
+it and ends its sessions itself when the database can be reached (never
+both at once, which would end each other's connection), and says
+whether it could: the lock is then free at once
 (QA round four lock-02: the next server was refused five or six times as
 if another ran). What a page came to that cannot be written because the
 database cannot be reached (a cut, a fenced store) is never the page's
