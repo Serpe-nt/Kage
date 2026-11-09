@@ -2246,7 +2246,7 @@ Rounds D to F and their reviews found these:
   returned: a retry on the same context typed beside it, a lent key could be
   cleared under it or a key stay down, and its keys reached the next
   request's tab (#82's review).
-- **F234 (low):** the hand's own mouse work (a reveal's wheel turns and
+- **F234 (low, fixed by [Serpe-nt/Kage#96](https://github.com/Serpe-nt/Kage/pull/96)):** the hand's own mouse work (a reveal's wheel turns and
   pointer moves) can still reach the display after a step whose budget it
   outlived: since F233 only the keys and the keymap watch the step's signal;
   `Human.click`, `reveal` and `play` should take it too (#88's review).
@@ -2263,6 +2263,124 @@ Rounds D to F and their reviews found these:
   ("A job that waits") and spec §8.3 do not name `server_errors`; the
   request's `max_body_bytes` description does not say the operator's limit
   caps it.
+
+
+## QA round four (2026-11-09)
+
+QA round four tested `main` after rounds D to F in two halves: the core
+(`docs/qa/2026-11-09-core.md`, 25 findings on f61fc9e, [Serpe-nt/Kage#94](https://github.com/Serpe-nt/Kage/pull/94)) and the
+browsers (`docs/qa/2026-11-09-browsers.md`, 6 findings on 98506e9,
+[Serpe-nt/Kage#102](https://github.com/Serpe-nt/Kage/pull/102)). Nine were high by the round's rule (a fix of rounds D to F that
+does not hold, or does not reach the road next to it). The sweep of rounds
+one to three's scripts (124 core, 59 browsers) found no fixed item back
+except browser-07 (typing-01 below). The firewall held: no SYN left the
+host but DNS.
+
+Where each finding went:
+
+- sched-01 (high): [Serpe-nt/Kage#95](https://github.com/Serpe-nt/Kage/pull/95).
+- lock-01 (high), lock-02, lock-03, lock-04: [Serpe-nt/Kage#98](https://github.com/Serpe-nt/Kage/pull/98) (open).
+- guard-03 (high): [Serpe-nt/Kage#92](https://github.com/Serpe-nt/Kage/pull/92).
+- pool0-01, pool0-05 (high): [Serpe-nt/Kage#91](https://github.com/Serpe-nt/Kage/pull/91).
+- pool0-04 (high): [Serpe-nt/Kage#93](https://github.com/Serpe-nt/Kage/pull/93).
+- pool0-02, pool0-03: [Serpe-nt/Kage#99](https://github.com/Serpe-nt/Kage/pull/99).
+- api-01 to api-07, guard-01, guard-04, obs-01, sched-02: [Serpe-nt/Kage#97](https://github.com/Serpe-nt/Kage/pull/97)
+  (open).
+- input-01 (high): [Serpe-nt/Kage#96](https://github.com/Serpe-nt/Kage/pull/96).
+- flow-01 (high): its own session (F238).
+- typing-01 (high by the rule): not reproduced on 9cb301b (#96 most likely
+  fixed it in passing); a Chromium regression test is due (F239).
+- sched-03, lock-05, guard-02, typing-02, typing-03, typing-04: F240 to
+  F245.
+
+The owner's decisions of 2026-11-09: a key's carried fetches are capped
+(`jobs.max_open_carried_per_key`, default 20; security review L2, in
+[Serpe-nt/Kage#97](https://github.com/Serpe-nt/Kage/pull/97)); RUSTSEC-2026-0459 (`libsqlite3-sys`, only an entry of
+`Cargo.lock`) is accepted until 2026-12-31 ([Serpe-nt/Kage#100](https://github.com/Serpe-nt/Kage/pull/100)); the planner
+pushes #85 with a lease where its session's own push was refused.
+
+Round four's fixes and their reviews found these:
+
+- **F237 (high, fixed by [Serpe-nt/Kage#95](https://github.com/Serpe-nt/Kage/pull/95); its review in [Serpe-nt/Kage#101](https://github.com/Serpe-nt/Kage/pull/101), open):** a flow's timeout behind
+  a redirect was booked to the flow's first site (a `goto`) or the
+  redirecting site (a click): the sidecar dropped where the redirect sent
+  the tab (sched-01). #101 (open) takes #95's review: a `back` from a
+  pending redirect names nothing, `unanswered_url` is never the shown page,
+  only http(s) targets; the driver's back that aborts a pending hop is no
+  failure.
+- **F238 (high):** flows-04's fix books a click's unanswered navigation
+  only when the click is the flow's last step (flow-01): a later step's
+  read waits on the pending navigation (Chrome's `keepFront` reads
+  `document.hasFocus()`; patchright's evaluate waits for the commit), hits
+  F103's 10 s read limit and marks the renderer stuck. A read that waits on
+  a pending navigation is no stuck renderer; the step after it reports the
+  unanswered navigation.
+- **F239 (high by the rule):** browser-07's Chrome half came back on 98506e9
+  (lent keys named `"\u0000"`) and is gone on 9cb301b (typing-01); find
+  what #96 changed and hold it with a Chromium test that fails on 98506e9.
+- **F240 (medium):** under `domain_concurrency: 1` one page whose retry
+  waits for the visit to end holds the whole batch `paused` `no_persona`
+  for `scheduler.visit_idle` while the site's visitor is free (sched-03).
+- **F241 (low):** a server killed while a page is read and started again at
+  once relays the dead server's browser navigation (round three's lock-03,
+  now lock-05): refuse a context the forwarder never opened, or close the
+  sidecars' contexts before it listens.
+- **F242 (low):** an unparseable redirect `Location` is `ssrf_denied` at
+  level 0 and in Firefox, `navigation_failed` in Chromium (guard-02): one
+  outcome at every level.
+- **F243 (medium):** a persona's keyboard layout follows its language
+  only: fr-CA types France's AZERTY (Canadian French is QWERTY), fr-CH and
+  it-CH get Swiss German, fr-LU AZERTY (typing-03).
+- **F244 (low):** `\r\n` is typed as two Enters (typing-02); the typo
+  neighbour table is German QWERTZ for every layout (typing-04); a lent
+  capital is typed without Shift; `^` and the grave accent on the German
+  layout are typed on a lent key, not as the dead key and a space; the `select`'s
+  arrow keys follow one another with no gap (the browsers report's
+  proposals).
+- **F245 (low):** the round's harness: round three's api-09 script says it
+  needs a stack that is up; pool-03 and api-08 bring their stacks down; a
+  round that sweeps ops-02 and ops-03 pulls the 2.0.2 images before its
+  firewall.
+- **F246 (low):** under `egress.mode: direct` or a host row, a target with no
+  address that answers is `Refused::Unreached`, answered `403` and noted
+  nowhere, so the client's `proxy_failed` stands and the host row is
+  reported to the pool (#92's review; guard-03's road without a proxy).
+- **F247 (low):** §25 says what happens to the address of a scout the
+  operator replaced (it said `kage` at level 0 and may read the site as a
+  person afterwards; `replace_scout`'s comment says it reads like anybody),
+  as §14 and `levels-and-egress.md` do (the core report; #93's review).
+- **F248 (low):** a session opened before its site had a scout can see its
+  persona chosen as the scout later; its fetches there are then `409
+  robots.scout`. Avoiding it needs sessions to record their domain (#93's
+  review).
+- **F249 (low):** the stop for the lock fences new statements, not
+  transactions already under way; ownership predicates on the job writes
+  (`worker = $me AND lease_until > now()`) would be the fencing token
+  (#98's review).
+- **F250 (low):** `open_carried_of_key` runs on every uncached fetch and
+  scans the key's retained jobs; a partial index on `jobs (api_key_id)`
+  where the job is a carried one under way would make it cheap (#97's
+  review).
+- **F251 (low):** the fetch e2e's byte count missed 45 bytes once, exactly a
+  proxy's empty `403` to a refused tunnel (#93's CI): a tunnel refusal's
+  answer is sometimes not counted.
+- **F252 (low):** #96's review, older than it: `unprepare`'s reset of a key
+  to "no symbol" can race a new `prepare` of the same keycode (#88);
+  abandoned step work still reads `this.page`/`this.document`, which
+  name the next request's tab after `freshPage` (F96's class); Firefox's
+  PDF polling loop outlives its step and shares `pdfPath` with the next
+  PDF.
+- **F253 (low):** #101: Chrome's back from a pending redirect fails while
+  F238 stands (a read after the hand's click waits on the navigation); its
+  parity case asserts the failure until F238's fix.
+- **F254 (low):** `jobs.max_open_carried_per_key` is counted when a fetch
+  is accepted, so a key may hold `max_open_carried_per_key + max_concurrent
+  - 1` (23 at the defaults); the documents say so (#97's review).
+- **F255 (low):** a driver step (`human: false`) now gets only the time
+  left after its element wait, and a Playwright timeout then names that
+  left-over time (`Timeout 37ms exceeded`), not the step's budget; rethrow
+  it as the step's own `did not finish within <timeout> ms` (#96's
+  follow-up check).
 
 ---
 
