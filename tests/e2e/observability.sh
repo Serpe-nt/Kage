@@ -252,8 +252,8 @@ done
 check "kage, the collector, Jaeger and Prometheus are up" "${up}" \
     "['kage','otel-collector','jaeger','prometheus'].every((job) => d.data.result.some((r) => r.metric.job === job && r.value[1] === '1'))"
 rules="$(got 'http://prometheus:9090/api/v1/rules')"
-check "the seven rules of Kage are loaded and healthy" "${rules}" \
-    "d.data.groups.length === 1 && d.data.groups[0].rules.length === 7 && d.data.groups[0].rules.every((r) => r.health === 'ok')"
+check "the eight rules of Kage are loaded and healthy" "${rules}" \
+    "d.data.groups.length === 1 && d.data.groups[0].rules.length === 8 && d.data.groups[0].rules.every((r) => r.health === 'ok') && d.data.groups[0].rules.some((r) => r.name === 'KageServerLockUnconfirmed')"
 names=(kage_requests_total kage_attempts_total kage_policy_breaker_threshold kage_persona_state
     kage_proxy_state kage_bandwidth_budget_ratio kage_api_requests_total kage_jobs
     kage_webhook_deliveries_total sidecar_contexts_open process_resident_memory_bytes)
