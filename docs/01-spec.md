@@ -2436,7 +2436,11 @@ never fetch what the file disallows, keep to its `Crawl-delay`).
 - **Who asks.** The site's *scout*: one persona per site (registrable
   domain), which asks for the `robots.txt` of each of the site's origins
   and for its sitemaps (§13) and never reads a page of the site; the
-  pipeline keeps it out of every other fetch of the site. It is
+  pipeline keeps it out of every other fetch of the site, a session's
+  too: a session opened for the site is never pinned to it, and a
+  session whose persona it is fetches nothing of the site (`409
+  session_persona_conflict`, constraint `robots.scout`; QA round four's
+  pool0-04). It is
   remembered (`site_scouts`), so that one address is marked and no other.
   The scout is, in this order: the persona that asked before; a ready
   persona the site's policy keeps from reading anyway (another country or
@@ -2772,8 +2776,11 @@ Sessions (§5): a session is opened by `POST /v1/sessions` and by nothing
 else. A fetch that names one that is not open is `404 session_not_found`,
 so a caller always knows when the persona behind an id is a new one. A
 session never moves: a fetch whose persona hints, or whose domain's
-policy, exclude the session's persona is `409 session_persona_conflict`
-naming the constraint, and nothing is fetched.
+policy, exclude the session's persona, or that reaches a site whose
+`robots.txt` scout the session's persona is (`robots.scout`, §14), is
+`409 session_persona_conflict` naming the constraint, and nothing is
+fetched; a job is refused so when it is accepted, and its item when it
+is run.
 
 ### 16.4 FetchRequest
 

@@ -18,6 +18,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use kage_core::domain::{CountryCode, Engine, Persona, Scope, Session, SessionId};
+use kage_core::ids::PersonaId;
 use kage_core::policy::{EffectivePolicy, normalize_host};
 use kage_persona::SessionError;
 use serde::{Deserialize, Serialize};
@@ -115,10 +116,17 @@ struct Wanted {
     countries: Vec<CountryCode>,
     engines: Vec<Engine>,
     policy: Option<EffectivePolicy>,
+    /// The `robots.txt` scout of the domain's site, which reads none of
+    /// its pages (spec §14; QA round four's pool0-04).
+    scout: Option<PersonaId>,
 }
 
 impl Wanted {
-    fn of(request: &SessionRequest, state: &ApiState) -> ApiResult<Self> {
+    async fn of(
+        request: &SessionRequest,
+        state: &ApiState,
+        engine: &EngineParts,
+    ) -> ApiResult<Self> {
         let hints = request.persona.clone().unwrap_or_default();
         let mut countries = Vec::with_capacity(hints.countries.len());
         for country in &hints.countries {
@@ -129,18 +137,29 @@ impl Wanted {
                 )
             })?);
         }
-        let policy = match &request.domain {
-            None => None,
+        let (policy, scout) = match &request.domain {
+            None => (None, None),
             Some(domain) => {
                 let host = normalize_host(domain)
                     .ok_or_else(|| ApiError::field("domain", "a host name, without a scheme"))?;
-                Some(state.policies().current().domains.resolve(&host))
+                let site = url::Url::parse(&format!("https://{host}/"))
+                    .map_err(|_| ApiError::field("domain", "a host name, without a scheme"))?;
+                let scout = engine
+                    .pipeline
+                    .scout_at(&site)
+                    .await
+                    .map_err(|error| ApiError::internal(&error))?;
+                (
+                    Some(state.policies().current().domains.resolve(&host)),
+                    scout,
+                )
             }
         };
         Ok(Self {
             countries,
             engines: hints.engines.iter().copied().map(Engine::from).collect(),
             policy,
+            scout,
         })
     }
 
@@ -164,6 +183,9 @@ impl Wanted {
                 return Some("policy.countries");
             }
         }
+        if self.scout == Some(persona.id) {
+            return Some("robots.scout");
+        }
         None
     }
 }
@@ -172,7 +194,8 @@ impl Wanted {
 ///
 /// `201` for a new session, `200` for one that is open under the id. The
 /// persona is the ready one with the fewest open sessions among those the
-/// hints and the domain's policy allow.
+/// hints and the domain's policy allow, and never the `robots.txt` scout of
+/// the domain's site, which reads none of its pages (`robots.scout`).
 #[utoipa::path(
     post,
     path = "/v1/sessions",
@@ -196,7 +219,7 @@ pub(crate) async fn open(
     caller.require(Scope::Sessions)?;
     let engine = engine(&state)?;
     let id = request.id.as_deref().map(session_id).transpose()?;
-    let wanted = Wanted::of(&request, &state)?;
+    let wanted = Wanted::of(&request, &state, engine).await?;
 
     let pinned = engine
         .personas
@@ -343,6 +366,7 @@ mod tests {
                     .unwrap()
                     .resolve("example.org")
             }),
+            scout: None,
         };
 
         assert_eq!(wanted(&[], &[], None).failed_by(&german_chrome), None);
@@ -376,5 +400,13 @@ mod tests {
             wanted(&[], &[], italy).failed_by(&german_chrome),
             Some("policy.countries")
         );
+        // The scout of the domain's site reads none of its pages
+        // (pool0-04); another persona may.
+        let scouted = Wanted {
+            scout: Some(german_chrome.id),
+            ..wanted(&[], &[], None)
+        };
+        assert_eq!(scouted.failed_by(&german_chrome), Some("robots.scout"));
+        assert_eq!(scouted.failed_by(&german_firefox), None);
     }
 }

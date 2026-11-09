@@ -28,6 +28,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::{HeaderValue, LOCATION, RETRY_AFTER};
 use axum::response::{IntoResponse, Response};
+use kage_browser::contract::FlowAction;
 use kage_core::domain::{Level, Persona, Scope, SessionId};
 use kage_core::policy::EffectivePolicy;
 use kage_persona::identity::http_spec;
@@ -75,6 +76,38 @@ pub(crate) fn conflict_of(
     None
 }
 
+/// The constraint a session's persona fails as the `robots.txt` scout of
+/// a site the request reaches (its page, or a `goto` of its flow):
+/// `robots.scout`. The scout reads none of the site's pages, and its
+/// address may be the site's level 0 exit, which never reads it as a
+/// person (spec §14, §25; QA round four's pool0-04).
+pub(crate) async fn scout_conflict(
+    engine: &EngineParts,
+    persona: &Persona,
+    planned: &Planned,
+) -> ApiResult<Option<&'static str>> {
+    let gotos = planned
+        .order
+        .flow
+        .iter()
+        .flat_map(|flow| &flow.actions)
+        .filter_map(|action| match action {
+            FlowAction::Goto { url, .. } => url::Url::parse(url).ok(),
+            _ => None,
+        });
+    for url in std::iter::once(planned.order.url.clone()).chain(gotos) {
+        let scout = engine
+            .pipeline
+            .scout_at(&url)
+            .await
+            .map_err(|error| failed(&error))?;
+        if scout == Some(persona.id) {
+            return Ok(Some("robots.scout"));
+        }
+    }
+    Ok(None)
+}
+
 /// The persona of the session a request names.
 pub(crate) async fn pinned(
     state: &ApiState,
@@ -101,7 +134,11 @@ pub(crate) async fn pinned(
     };
     let host = planned.order.url.host_str().unwrap_or_default();
     let policy = state.policies().current().domains.resolve(host);
-    if let Some(constraint) = conflict_of(&found.persona, planned, &policy) {
+    let constraint = match conflict_of(&found.persona, planned, &policy) {
+        Some(constraint) => Some(constraint),
+        None => scout_conflict(engine, &found.persona, planned).await?,
+    };
+    if let Some(constraint) = constraint {
         let viewer = Viewer {
             key: caller.key.id,
             admin: caller.has(Scope::Admin),
