@@ -75,9 +75,9 @@ use super::request::{
 };
 use super::webhook::{self, WebhookSender};
 use crate::error::{ApiError, ErrorCode};
-use crate::fetch::conflict_of;
 use crate::fetch::request::{FetchRequest, Planned, lost_credential, plan};
 use crate::fetch::terms::{CacheUse, settle};
+use crate::fetch::{conflict_of, scout_conflict};
 use crate::state::{ApiState, EngineParts};
 
 mod crawl;
@@ -430,7 +430,12 @@ impl Work {
         };
         let host = planned.order.url.host_str().unwrap_or_default();
         let policy = self.state.policies().current().domains.resolve(host);
-        if conflict_of(&found.persona, planned, &policy).is_some() {
+        // The site's scout among them, chosen since the job was accepted
+        // (QA round four's pool0-04).
+        let scout = scout_conflict(&self.engine, &found.persona, planned)
+            .await
+            .map_err(|_| "internal".to_owned())?;
+        if conflict_of(&found.persona, planned, &policy).is_some() || scout.is_some() {
             return Err(ErrorCode::SessionPersonaConflict.as_str().to_owned());
         }
         planned.order.pin = Some(found.persona.id);

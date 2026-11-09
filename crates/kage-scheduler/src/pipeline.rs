@@ -1928,8 +1928,17 @@ impl Pipeline {
             render: course.progress.render(),
             // A session's persona.
             pin: order.pin,
-            exclude: if order.pin.is_some() {
-                Vec::new()
+            exclude: if let Some(pin) = order.pin {
+                // Unless it is the scout of a site the request reaches,
+                // which reads none of its pages (spec §14): then nobody
+                // may serve it, and nothing of the site is asked (QA
+                // round four's pool0-04). The API refuses such a request
+                // before it begins; this holds for a scout chosen since.
+                if !order.scout && !self.robots.own_scout && self.scouts_of(course).contains(&pin) {
+                    vec![pin]
+                } else {
+                    Vec::new()
+                }
             } else {
                 // Those that tried already, those the caller keeps out,
                 // and the site's scout, which reads none of its pages: the

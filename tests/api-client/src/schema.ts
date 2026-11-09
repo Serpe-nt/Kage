@@ -591,7 +591,8 @@ export interface paths {
          * Open a session, or return the open one.
          * @description `201` for a new session, `200` for one that is open under the id. The
          *     persona is the ready one with the fewest open sessions among those the
-         *     hints and the domain's policy allow.
+         *     hints and the domain's policy allow, and never the `robots.txt` scout of
+         *     the domain's site, which reads none of its pages (`robots.scout`).
          */
         post: operations["open_session"];
         delete?: never;

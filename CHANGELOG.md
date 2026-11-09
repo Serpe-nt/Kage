@@ -596,6 +596,18 @@ version's date is the day, in UTC, its tag was made.
   was revoked is let up at once; and a `human: false` step's driver action
   gets only what is left of the step's time after the wait for its
   element.
+- **A site's robots scout is never a session's persona there (QA round
+  four, pool0-04).** The pipeline kept the scout out of every fetch of
+  its site but a session's: a session for the site could be pinned to
+  it, and then read the site as a person from the address its level 0
+  leaves by (`kage/<version>` and a browser's pages from one address).
+  A session opened for a domain is never pinned to its site's scout; a
+  fetch or a job in a session whose persona is the scout of a site it
+  reaches (its page, or a `goto` of its flow) is `409
+  session_persona_conflict` with the constraint `robots.scout`, and
+  nothing is fetched; a job's item is refused so when the scout was
+  chosen after the job was accepted, and the pipeline itself never lets
+  a pinned request of a site be made by its scout.
 
 ### Changed
 

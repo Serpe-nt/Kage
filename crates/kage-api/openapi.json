@@ -2418,7 +2418,7 @@
           "sessions"
         ],
         "summary": "Open a session, or return the open one.",
-        "description": "`201` for a new session, `200` for one that is open under the id. The\npersona is the ready one with the fewest open sessions among those the\nhints and the domain's policy allow.",
+        "description": "`201` for a new session, `200` for one that is open under the id. The\npersona is the ready one with the fewest open sessions among those the\nhints and the domain's policy allow, and never the `robots.txt` scout of\nthe domain's site, which reads none of its pages (`robots.scout`).",
         "operationId": "open_session",
         "requestBody": {
           "content": {

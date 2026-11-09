@@ -281,6 +281,29 @@ impl Pipeline {
             .filter(|until| *until > now))
     }
 
+    /// The scout of the site of `url` (spec §14). It reads none of the
+    /// site's pages, and its proxy is the site's level 0 exit when the
+    /// pool has no plain exit of its own (§25), so no session whose
+    /// persona it is may fetch there (QA round four's pool0-04). `None`
+    /// when the site has none yet, and where the scout reads the site
+    /// like anybody (`robots.own_scout`: nobody else could ask).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the backend fails.
+    pub async fn scout_at(&self, url: &Url) -> Result<Option<PersonaId>, SchedulerError> {
+        if self.robots.own_scout {
+            return Ok(None);
+        }
+        let Some(host) = url
+            .host_str()
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
+        else {
+            return Ok(None);
+        };
+        self.site_scout(&kage_crawl::site::of_host(&host)).await
+    }
+
     async fn choose_scout(
         &self,
         site: &str,

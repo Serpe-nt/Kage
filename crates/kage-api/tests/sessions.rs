@@ -25,6 +25,114 @@ async fn serve(api: &Api, at: &str) {
         .await;
 }
 
+/// The persona a session of any key is pinned to.
+async fn persona_of(api: &Api, session: &str) -> uuid::Uuid {
+    sqlx::query_scalar("SELECT persona_id FROM sessions WHERE id = $1")
+        .bind(session)
+        .fetch_one(api.lab.store().pool())
+        .await
+        .unwrap()
+}
+
+/// QA round four's pool0-04: a session for a site was pinned to the
+/// site's `robots.txt` scout and read the site as a person, from the
+/// address its level 0 leaves by (spec §14, §25). A session for the
+/// site is never pinned to its scout, and one whose persona is the
+/// scout fetches nothing there: `409 session_persona_conflict`,
+/// `robots.scout`, for a fetch and for a job.
+#[tokio::test]
+async fn the_sites_scout_is_never_a_sessions_persona_there() {
+    let mut api = Api::start(2, 149, FAST).await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs, Scope::Sessions]).await;
+    serve(&api, "/a").await;
+
+    // A session opened before the site had a scout, whose persona the
+    // site's scout is now.
+    let early = api
+        .post(&token, "/v1/sessions", &json!({ "id": "early" }))
+        .await;
+    assert_eq!(early.status, StatusCode::CREATED, "{:?}", early.json());
+    let scout = persona_of(&api, "early").await;
+    sqlx::query(
+        "INSERT INTO site_scouts (site, persona_id, since) VALUES ('kage.test', $1, now())",
+    )
+    .bind(scout)
+    .execute(api.lab.store().pool())
+    .await
+    .unwrap();
+
+    // It fetches nothing of the site.
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/a"), "level": 1, "session_id": "early" }),
+        )
+        .await;
+    let problem = reply.problem(StatusCode::CONFLICT, "session_persona_conflict");
+    assert_eq!(problem["constraint"], "robots.scout");
+    assert_eq!(problem["session_id"], "early");
+    let job = api
+        .post(
+            &token,
+            "/v1/jobs",
+            &json!({
+                "type": "batch",
+                "urls": [Api::url("/a")],
+                "defaults": { "level": 1 },
+                "session_id": "early",
+            }),
+        )
+        .await;
+    let problem = job.problem(StatusCode::CONFLICT, "session_persona_conflict");
+    assert_eq!(problem["constraint"], "robots.scout");
+    assert!(api.lab.received("/a").await.is_empty());
+    // Asked to stay with the site, the open session is a conflict too.
+    let reply = api
+        .post(
+            &token,
+            "/v1/sessions",
+            &json!({ "id": "early", "domain": "shop.kage.test" }),
+        )
+        .await;
+    assert_eq!(
+        reply.problem(StatusCode::CONFLICT, "session_persona_conflict")["constraint"],
+        "robots.scout"
+    );
+
+    // A new session for the site is never pinned to its scout.
+    for id in ["s1", "s2", "s3", "s4"] {
+        let opened = api
+            .post(
+                &token,
+                "/v1/sessions",
+                &json!({ "id": id, "domain": "www.kage.test" }),
+            )
+            .await;
+        assert_eq!(opened.status, StatusCode::CREATED, "{:?}", opened.json());
+        assert_ne!(persona_of(&api, id).await, scout, "{id}");
+    }
+    let reply = api
+        .post(
+            &token,
+            "/v1/fetch",
+            &json!({ "url": Api::url("/a"), "level": 1, "session_id": "s1" }),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+    assert_eq!(reply.json()["outcome"], "ok");
+    // The early session still reads any other site.
+    let other = api
+        .post(
+            &token,
+            "/v1/sessions",
+            &json!({ "id": "early", "domain": "other.example" }),
+        )
+        .await;
+    assert_eq!(other.status, StatusCode::OK, "{:?}", other.json());
+    api.shut_down().await;
+}
+
 #[tokio::test]
 async fn a_session_is_opened_once_looked_at_and_ended() {
     let mut api = Api::start(2, 149, FAST).await;

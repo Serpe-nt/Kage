@@ -63,7 +63,7 @@ use crate::error::{ApiError, ApiResult, ErrorCode, Problem};
 use crate::extract::{Body, Params};
 use crate::fetch::request::{FetchRequest, Included, Planned};
 use crate::fetch::result::{Bodies, Viewer, from_stored};
-use crate::fetch::{conflict_of, pinned};
+use crate::fetch::{conflict_of, pinned, scout_conflict};
 use crate::state::ApiState;
 
 /// The header that names a job for a day.
@@ -280,7 +280,11 @@ async fn check_session(
     for (index, one) in planned.iter().enumerate().skip(1) {
         let host = one.order.url.host_str().unwrap_or_default();
         let policy = policies.domains.resolve(host);
-        if let Some(constraint) = conflict_of(&persona, one, &policy) {
+        let constraint = match conflict_of(&persona, one, &policy) {
+            Some(constraint) => Some(constraint),
+            None => scout_conflict(engine, &persona, one).await?,
+        };
+        if let Some(constraint) = constraint {
             return Err(ApiError::new(
                 ErrorCode::SessionPersonaConflict,
                 format!(

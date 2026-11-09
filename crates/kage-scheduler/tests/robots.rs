@@ -607,6 +607,60 @@ async fn a_file_no_scout_could_bring_is_never_allowed_beside_its_refusal() {
     world.shut_down().await;
 }
 
+/// QA round four's pool0-04: a session pinned to the site's scout read
+/// the site as a person, from the address its level 0 leaves by. The
+/// pipeline keeps the scout out of a pinned request too: nobody may
+/// serve it, and nothing of the site is asked. (The API refuses such a
+/// request before it begins: `409 session_persona_conflict`,
+/// `robots.scout`.)
+#[tokio::test(start_paused = true)]
+async fn a_request_pinned_to_the_sites_scout_reads_nothing_of_it() {
+    let mut world = World::new(4, SITES);
+    robots_txt(&world, |url| file(url, 200, RULES));
+    let first = world
+        .pipeline
+        .fetch(get("https://enforced.example/a"))
+        .await
+        .unwrap();
+    assert_eq!(first.outcome, Outcome::Ok);
+    let scout = world.backend.scout_of("enforced.example").unwrap();
+    let address = Url::parse("https://www.enforced.example/x").unwrap();
+    assert_eq!(
+        world.pipeline.scout_at(&address).await.unwrap(),
+        Some(scout)
+    );
+    let elsewhere = Url::parse("https://reported.example/x").unwrap();
+    assert_eq!(world.pipeline.scout_at(&elsewhere).await.unwrap(), None);
+
+    let before = world.script.seen().len();
+    let pinned = world
+        .pipeline
+        .fetch(FetchOrder {
+            pin: Some(scout),
+            ..get("https://enforced.example/b")
+        })
+        .await
+        .unwrap();
+    assert_ne!(pinned.outcome, Outcome::Ok);
+    assert_eq!(pinned.reason.as_deref(), Some("no_persona"));
+    assert_eq!(pinned.attempts, []);
+    assert_eq!(world.script.seen().len(), before);
+
+    // Another persona pinned reads it as before.
+    let reader = (0..4).map(id).find(|persona| *persona != scout).unwrap();
+    let read = world
+        .pipeline
+        .fetch(FetchOrder {
+            pin: Some(reader),
+            ..get("https://enforced.example/c")
+        })
+        .await
+        .unwrap();
+    assert_eq!(read.outcome, Outcome::Ok, "{:?}", read.reason);
+    assert_eq!(read.attempts[0].persona_id, Some(reader));
+    world.shut_down().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_scout_that_is_turned_away_cools_down_like_any_persona() {
     let mut world = World::new(4, SITES);
