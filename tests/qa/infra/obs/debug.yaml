@@ -1,0 +1,7 @@
+# QA round four, obs: given after infra/timers/obs.yaml; the collector
+# reads infra/obs/collector-debug.yaml (Jaeger plus the `debug` exporter).
+services:
+  otel-collector:
+    volumes:
+      - /scripts/qa/infra/obs/collector-debug.yaml:/etc/otelcol/config.yaml:ro
+    mem_limit: 384m

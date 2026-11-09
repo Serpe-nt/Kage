@@ -88,6 +88,34 @@ from a bundle and rebuilds (firewall off for the build, on again after).
 `dnscheck.sh` counts the browsers' background lookups that leave under the
 pool and under `direct`.
 
+## Round four, part A: the core (`infra/`)
+
+Round four's core part (`docs/qa/2026-11-09-core.md`) ran in a container
+`kage-qa4-core`, started from the host by `container/host-up4.sh WORKTREE
+SCRATCH` (the worktree read-only at `/work`, `SCRATCH/scripts` at
+`/scripts`, `SCRATCH/out` at `/out`). `container/pull4.sh` pulls Postgres,
+the observability images and k6 at round three's digests; `prepare4.sh`
+clones the commit from `/out/qa.bundle` into `/target/qa/kage` and builds
+only the three images: the CLI is the `kage` image's own binary, run with no
+network by `cli/k4.sh`, which `prepare4.sh` installs where round one's
+scripts look for a debug build (`/target/devtarget/debug/kage`), so no
+cargo target is filled. `fw-on4.sh` / `fw-off4.sh` are round three's
+firewall with the round in a variable (capture `/out/qa4/fw-drops-N.pcap`).
+A sweep that runs round three's ops-02 and ops-03 needs the 2.0.2 images
+pulled (and built, for Firefox) before the firewall.
+
+| Folder | What it adds | How a stack uses it |
+|---|---|---|
+| `sched/` | `names.sh` and `names4.sh` write `names3.yaml` / `names4.yaml` beside themselves: `s1..s8`, `n1..n6.qa.test` and (names4) `sc1..sc8.test`, each a registrable domain of its own, fresh sites for robots scouts; `fast-names.yaml`, `fast-sc.yaml` (their domain rules, `sc*` with `robots: enforce`) | `--overlay=/scripts/qa/infra/sched/names4.yaml` at `up`, then `stack.sh add-domains NAME < .../fast-names.yaml` |
+| `guard/` | `rawproxy.mjs` (the world's proxy that logs each raw request target, `Host` and header names at `GET /__raw`, and answers listed targets with a status: `--answer host:port=403,...`, `--challenge`), `guard.yaml` (the three proxies run it; `deny403/407/502.qa.test`; the responder on 8091 and 8092), `guard-domains.yaml`, `blackhole.pl` (a proxy that drops SYNs or accepts and stays silent), `hooks25.yaml` (a receiver on port 25) | `--overlay=/scripts/qa/infra/guard/guard.yaml` at `up`, then `add-domains < guard-domains.yaml` |
+| `obs/` | the collector with a `detailed` debug exporter (`collector-debug.yaml`, mounted by `debug.yaml`), `exits3.yaml` (settable exits for the three default proxies), `up.sh` (a stack with the observability profile and a Grafana password made at run time), `obs.sh` (Prometheus, Jaeger, Grafana and `/metrics` helpers), `panels.mjs` (runs every dashboard query) | `infra/obs/up.sh NAME [GRAFANA_PORT]` |
+
+`sweep4core.sh` runs the core's rows of rounds one to three (`list`,
+`r1-shared`, `r1-own`, `r2-fresh`, `r2-own`, `r3`; round three's flows-04 as
+round F's copy pinned to Chromium, from the evidence), `verify4.sh`
+reproduces a round's findings each on a fresh stack or its own, and
+`retry4.sh N ID...` tries a race up to N times.
+
 Each finding of a round has its `finding.md` and `repro.sh` in the round's
 evidence, outside the repository; a repro names the world it needs on its
 second line (`# own-stack: ...`).

@@ -1,2 +1,5 @@
 # Made at run time by infra/tls/mkcerts.sh; never committed.
 infra/tls/certs/
+# Written beside themselves by infra/sched/names.sh and names4.sh.
+infra/sched/names3.yaml
+infra/sched/names4.yaml
