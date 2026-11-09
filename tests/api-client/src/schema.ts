@@ -4384,7 +4384,7 @@ export interface operations {
             };
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
-            /** @description Nothing can be fetched: no proxy pool, or the server stops. */
+            /** @description Nothing was fetched, and the same request may be sent again later: no proxy pool, the server stops, or the database could not be reached before the site was asked (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4504,7 +4504,7 @@ export interface operations {
             };
             431: components["responses"]["HeadersTooLarge"];
             500: components["responses"]["InternalError"];
-            /** @description Nothing can be fetched: no proxy pool, or the server stops. */
+            /** @description No job was accepted, and the same request may be sent again later: no proxy pool, the server stops, or the database could not be reached to check a session's persona against the sites' scouts (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;

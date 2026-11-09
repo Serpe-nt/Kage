@@ -339,6 +339,20 @@ fn store_end(error: &StoreError) -> ItemEnd {
     }
 }
 
+/// What an item comes to when its session's persona could not be checked
+/// against the sites' scouts: it waits for a database out of reach, it is
+/// stopped with a server that stops, and it fails on anything else (review
+/// of #98).
+fn scout_unknown(error: &SchedulerError) -> ItemEnd {
+    if error.is_store_unreachable() {
+        store_failed()
+    } else if matches!(error, SchedulerError::ShuttingDown) {
+        ItemEnd::Stopped
+    } else {
+        internal()
+    }
+}
+
 /// An item that cannot be run: something inside Kage failed.
 fn internal() -> ItemEnd {
     ItemEnd::Failed {
@@ -475,16 +489,11 @@ impl Work {
         let conflict = match conflict_of(&found.persona, planned, &policy) {
             Some(constraint) => Some(constraint),
             // A site's scout that cannot be looked up because the
-            // database cannot be reached is the database's failure.
+            // database cannot be reached is the database's failure, and a
+            // server that stops ends the item as it ends any.
             None => scout_conflict(&self.engine, &found.persona, planned)
                 .await
-                .map_err(|error| {
-                    if error.code() == ErrorCode::Unavailable {
-                        store_failed()
-                    } else {
-                        internal()
-                    }
-                })?,
+                .map_err(|error| scout_unknown(&error))?,
         };
         if conflict.is_some() {
             return Err(failed(ErrorCode::SessionPersonaConflict));
@@ -2113,7 +2122,31 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use super::{Signal, default_wait, error_of, later, page_ended_on, raise};
+    use super::{
+        ItemEnd, Signal, default_wait, error_of, later, page_ended_on, raise, scout_unknown,
+    };
+
+    /// Review of #98: a session's persona that could not be checked
+    /// against the scouts waits for a database out of reach, stops with a
+    /// server that stops, and fails on Kage's own fault.
+    #[test]
+    fn a_scout_that_cannot_be_looked_up_waits_stops_or_fails_by_why() {
+        use kage_scheduler::SchedulerError;
+        let cut =
+            SchedulerError::Store(kage_store::StoreError::Unreachable(Duration::from_secs(3)));
+        assert!(matches!(
+            scout_unknown(&cut),
+            ItemEnd::Deferred { ref reason, until: None } if reason == "store"
+        ));
+        assert!(matches!(
+            scout_unknown(&SchedulerError::ShuttingDown),
+            ItemEnd::Stopped
+        ));
+        assert!(matches!(
+            scout_unknown(&SchedulerError::Store(kage_store::StoreError::Unnamed)),
+            ItemEnd::Failed { ref error, outcome: None } if error == "internal"
+        ));
+    }
 
     #[test]
     fn a_signal_only_ever_rises() {

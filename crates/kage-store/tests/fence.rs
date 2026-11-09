@@ -339,3 +339,123 @@ async fn a_transaction_under_way_when_the_fence_came_is_rolled_back() {
         .unwrap();
     assert_eq!(left, 0);
 }
+
+/// Third check of #98: a pool whose sessions carry no name of a server's
+/// (a test's) takes back the lock its own silent session holds, ending
+/// that session by its backend alone, though Postgres names it `''`.
+#[tokio::test]
+async fn an_unnamed_pools_own_silent_session_is_taken_back_by_its_backend() {
+    let db = TestDb::migrated().await;
+    assert_eq!(db.store.application_name(), None);
+    let mut old = ServerLock::take(db.store.pool()).await.unwrap().unwrap();
+    let stale = old.pid();
+    let back = ServerLock::take_back(db.store.pool(), stale)
+        .await
+        .unwrap()
+        .expect("its own session's lock is taken back");
+    assert_ne!(back.pid(), stale);
+    assert_eq!(holder(&db.url).await, Some(back.pid()));
+    assert!(old.held().await.is_err());
+}
+
+/// A relay in front of the database that holds new connections back while
+/// it is held, and counts them.
+struct Relay {
+    /// The database's URL through the relay.
+    url: String,
+    open: tokio::sync::watch::Sender<bool>,
+    accepted: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Relay {
+    /// A relay to the database of `url`, open.
+    async fn start(url: &str) -> Self {
+        let (user, rest) = url.split_once('@').unwrap();
+        let (target, database) = rest.split_once('/').unwrap();
+        let target = target.to_owned();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (open, gate) = tokio::sync::watch::channel(true);
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&accepted);
+        let task = tokio::spawn(async move {
+            while let Ok((mut client, _)) = listener.accept().await {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut gate = gate.clone();
+                let target = target.clone();
+                tokio::spawn(async move {
+                    if gate.wait_for(|open| *open).await.is_err() {
+                        return;
+                    }
+                    let Ok(mut server) = tokio::net::TcpStream::connect(&target).await else {
+                        return;
+                    };
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+                });
+            }
+        });
+        Self {
+            url: format!("{user}@127.0.0.1:{port}/{database}"),
+            open,
+            accepted,
+            task,
+        }
+    }
+
+    /// Holds new connections back, or lets them through.
+    fn set_open(&self, open: bool) {
+        self.open.send_replace(open);
+    }
+
+    /// How many connections it took.
+    fn accepted(&self) -> usize {
+        self.accepted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Third check of #98: a connect the pool began before the fence and that
+/// opens after it carries no statement, and the pool does not try again:
+/// the connection waited for fails at once, not at the acquire timeout,
+/// and no new session is opened in the database after the fence.
+#[tokio::test]
+async fn a_connect_under_way_at_the_fence_fails_at_once_and_is_not_tried_again() {
+    let db = TestDb::migrated().await;
+    let relay = Relay::start(&db.url).await;
+    let store = server_store(&relay.url, 2).await;
+    // The pool's one open connection is busy: the next acquire connects.
+    let busy = store.pool().acquire().await.unwrap();
+    relay.set_open(false);
+    let before = relay.accepted();
+    let waiting = {
+        let store = store.clone();
+        tokio::spawn(async move { store.pool().acquire().await.map(drop) })
+    };
+    for _ in 0..40 {
+        if relay.accepted() > before {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(relay.accepted(), before + 1, "the acquire connects");
+
+    store.fence();
+    let let_through = Instant::now();
+    relay.set_open(true);
+    assert!(waiting.await.unwrap().is_err());
+    assert!(
+        let_through.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        let_through.elapsed()
+    );
+    // Nothing was tried again through the relay.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(relay.accepted(), before + 1);
+    drop(busy);
+}

@@ -80,12 +80,14 @@ pub(crate) fn conflict_of(
 /// a site the request reaches (its page, or a `goto` of its flow):
 /// `robots.scout`. The scout reads none of the site's pages, and its
 /// address may be the site's level 0 exit, which never reads it as a
-/// person (spec §14, §25; QA round four's pool0-04).
+/// person (spec §14, §25; QA round four's pool0-04). The scheduler's
+/// failure as it is, for the caller to tell a stop, a database out of reach
+/// and its own fault apart (review of #98).
 pub(crate) async fn scout_conflict(
     engine: &EngineParts,
     persona: &Persona,
     planned: &Planned,
-) -> ApiResult<Option<&'static str>> {
+) -> Result<Option<&'static str>, SchedulerError> {
     let gotos = planned
         .order
         .flow
@@ -96,11 +98,7 @@ pub(crate) async fn scout_conflict(
             _ => None,
         });
     for url in std::iter::once(planned.order.url.clone()).chain(gotos) {
-        let scout = engine
-            .pipeline
-            .scout_at(&url)
-            .await
-            .map_err(|error| failed(&error))?;
+        let scout = engine.pipeline.scout_at(&url).await?;
         if scout == Some(persona.id) {
             return Ok(Some("robots.scout"));
         }
@@ -136,7 +134,9 @@ pub(crate) async fn pinned(
     let policy = state.policies().current().domains.resolve(host);
     let constraint = match conflict_of(&found.persona, planned, &policy) {
         Some(constraint) => Some(constraint),
-        None => scout_conflict(engine, &found.persona, planned).await?,
+        None => scout_conflict(engine, &found.persona, planned)
+            .await
+            .map_err(|error| failed_before_asking(&error))?,
     };
     if let Some(constraint) = constraint {
         let viewer = Viewer {
@@ -183,14 +183,25 @@ fn failed(error: &SchedulerError) -> ApiError {
             ErrorCode::Unavailable,
             "the server is stopping; the request was not fetched",
         ),
-        // The database could not be reached: nothing is wrong with the
-        // request, and asking again later may succeed (QA round four
-        // lock-01, review of #98).
-        other if other.is_store_unreachable() => ApiError::new(
-            ErrorCode::Unavailable,
-            "the database cannot be reached now; the request was not fetched",
-        ),
         other => ApiError::internal(other),
+    }
+}
+
+/// What a failure of the pipeline before anything was asked of the site
+/// (a scout looked up, the cache asked) is answered with: as
+/// [`failed`], but a database out of reach is `unavailable`, since nothing
+/// is wrong with the request and nothing was fetched, so sending it again
+/// later fetches the page once (QA round four lock-01, review of #98). A
+/// failure of a fetch under way stays `internal`: the site may have been
+/// asked already.
+pub(crate) fn failed_before_asking(error: &SchedulerError) -> ApiError {
+    if error.is_store_unreachable() {
+        ApiError::new(
+            ErrorCode::Unavailable,
+            "the database cannot be reached now; nothing was asked of the site",
+        )
+    } else {
+        failed(error)
     }
 }
 
@@ -221,7 +232,7 @@ fn failed(error: &SchedulerError) -> ApiError {
         (status = 409, description = "`session_persona_conflict`.", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "The request cannot be made as asked; `code` says why.", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "A limit of the key or of the API; `Retry-After` says when. `jobs_limited`: the key has as many fetches carried on as jobs open as it may have (`jobs.max_open_carried_per_key`), with `open_carried` and `max_open_carried`.", body = Problem, content_type = "application/problem+json"),
-        (status = 503, description = "Nothing can be fetched: no proxy pool, or the server stops.", body = Problem, content_type = "application/problem+json"),
+        (status = 503, description = "Nothing was fetched, and the same request may be sent again later: no proxy pool, the server stops, or the database could not be reached before the site was asked (`unavailable`).", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["fetch"]))
 )]
@@ -280,7 +291,7 @@ pub(crate) async fn fetch(
         .pipeline
         .has_cached(&planned.order)
         .await
-        .map_err(|error| failed(&error))?;
+        .map_err(|error| failed_before_asking(&error))?;
     if !held {
         // A key's fetches carried on as jobs are bounded where a fetch is
         // accepted (QA round four, api-05; L2).
@@ -402,7 +413,7 @@ mod tests {
     use serde_json::json;
 
     use super::request::{FetchRequest, plan};
-    use super::{conflict_of, failed};
+    use super::{conflict_of, failed, failed_before_asking};
     use crate::error::ErrorCode;
     use crate::test_support::persona;
 
@@ -509,17 +520,30 @@ human:
             "{}",
             panicked.detail()
         );
-        // Review of #98: a database out of reach is no fault of Kage's
-        // and no fault of the request: asking again later may succeed.
-        // One the database refused for what it is stays Kage's own.
-        let cut = kage_store::StoreError::Unreachable(std::time::Duration::from_secs(3));
-        assert_eq!(
-            failed(&SchedulerError::Store(cut)).code(),
-            ErrorCode::Unavailable
+        // Review of #98: a database out of reach before the site was asked
+        // is no fault of the request, and nothing was fetched: sending it
+        // again fetches the page once. During a fetch, the site may have
+        // been asked already: Kage's own fault, never "send it again". One
+        // the database refused for what it is stays Kage's own.
+        let cut = || kage_store::StoreError::Unreachable(std::time::Duration::from_secs(3));
+        let before = failed_before_asking(&SchedulerError::Store(cut()));
+        assert_eq!(before.code(), ErrorCode::Unavailable);
+        assert!(
+            before.detail().contains("nothing was asked of the site"),
+            "{}",
+            before.detail()
         );
         assert_eq!(
-            failed(&SchedulerError::Store(kage_store::StoreError::Unnamed)).code(),
+            failed(&SchedulerError::Store(cut())).code(),
             ErrorCode::Internal
+        );
+        assert_eq!(
+            failed_before_asking(&SchedulerError::Store(kage_store::StoreError::Unnamed)).code(),
+            ErrorCode::Internal
+        );
+        assert_eq!(
+            failed_before_asking(&SchedulerError::ShuttingDown).code(),
+            ErrorCode::Unavailable
         );
     }
 }

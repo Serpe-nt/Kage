@@ -375,22 +375,39 @@ async fn end_own_sessions_soon(store: Store) -> SessionsEnded {
     }
 }
 
-/// Ends a fenced store's sessions on the server's way out: the task the
-/// fence started, when it ends within [`OWN_SESSIONS_WITHIN`]; else that
-/// task is stopped first, and they are ended once more here.
+/// Ends a fenced store's sessions on the server's way out, within
+/// [`OWN_SESSIONS_WITHIN`] in all (spec §16.6): the task the fence started
+/// when it ends by then, and it is stopped when it does not. They are
+/// ended here only when no task was started, or it ended without an
+/// answer (it panicked), in what is left of that time. A task stopped at
+/// the deadline may have sent its terminate already, and nothing can call
+/// it back: Postgres may end the sessions after all, and the way out says
+/// only that it could not reach the database to see it done. No second
+/// pass follows it, so that no terminate of the first ends the second's
+/// session and makes a failure of what succeeded (review of #98).
 async fn end_sessions_on_the_way_out(store: &Store, ending: &Ending) -> SessionsEnded {
+    let deadline = tokio::time::Instant::now() + OWN_SESSIONS_WITHIN;
     let started = ending
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take();
     if let Some(mut task) = started {
-        if let Ok(Ok(ended)) = tokio::time::timeout(OWN_SESSIONS_WITHIN, &mut task).await {
-            return ended;
+        match tokio::time::timeout_at(deadline, &mut task).await {
+            Ok(Ok(ended)) => return ended,
+            // It panicked: ended here in what is left.
+            Ok(Err(_)) => {}
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                return Err(kage_store::StoreError::Unreachable(OWN_SESSIONS_WITHIN));
+            }
         }
-        task.abort();
-        let _ = task.await;
     }
-    store.end_own_sessions(OWN_SESSIONS_WITHIN).await
+    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if left.is_zero() {
+        return Err(kage_store::StoreError::Unreachable(OWN_SESSIONS_WITHIN));
+    }
+    store.end_own_sessions(left).await
 }
 
 /// Why a server stops for its database's lock.
@@ -1592,12 +1609,29 @@ mod lock_tests {
 
     /// Review of #98: the fence starts ending the server's sessions, once,
     /// and the way out waits for that task within its bound, or stops it
-    /// before it ends them itself: here the database cannot be reached, and
-    /// the way out says so.
+    /// then and ends nothing more itself. Here the database takes the
+    /// connection and never answers: the way out ends within
+    /// [`super::OWN_SESSIONS_WITHIN`] in all, says the database could not
+    /// be reached, and the task connects no more once stopped (third check
+    /// of #98).
     #[tokio::test]
     async fn the_fence_starts_ending_the_sessions_and_the_way_out_takes_that_task_over() {
-        // Named as a server's store is; nothing listens on its port.
-        let options = "postgres://kage@127.0.0.1:1/kage"
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // A database that takes every connection and answers nothing.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&accepted);
+        let silent = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                held.push(stream);
+            }
+        });
+        // Named as a server's store is.
+        let options = format!("postgres://kage@127.0.0.1:{port}/kage")
             .parse::<sqlx::postgres::PgConnectOptions>()
             .unwrap()
             .application_name("kage test");
@@ -1623,12 +1657,25 @@ mod lock_tests {
 
         let asked = std::time::Instant::now();
         let ended = super::end_sessions_on_the_way_out(&store, &ending).await;
+        let took = asked.elapsed();
         assert!(ending.lock().unwrap().is_none());
         assert_eq!(OwnSessions::of(&ended), OwnSessions::Unreachable);
+        // One bound for the task and the way out together, not one each.
         assert!(
-            asked.elapsed() < super::OWN_SESSIONS_WITHIN * 3,
-            "{:?}",
-            asked.elapsed()
+            took + Duration::from_millis(100) >= super::OWN_SESSIONS_WITHIN,
+            "{took:?}"
         );
+        assert!(
+            took < super::OWN_SESSIONS_WITHIN + Duration::from_secs(1),
+            "{took:?}"
+        );
+        // The task connected once, and the way out not at all; stopped, the
+        // task connects no more: it would again a second after its first
+        // try ran out.
+        let connected = accepted.load(Ordering::SeqCst);
+        assert_eq!(connected, 1);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(accepted.load(Ordering::SeqCst), connected);
+        silent.abort();
     }
 }

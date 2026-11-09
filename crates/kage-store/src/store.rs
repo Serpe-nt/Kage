@@ -83,7 +83,18 @@ impl MigrationStatus {
 pub struct Store {
     pool: PgPool,
     fenced: Arc<AtomicBool>,
+    /// How the store's sessions connect, kept apart from the pool's: the
+    /// fence points the pool elsewhere, and the store still ends its own
+    /// sessions with these (review of #98).
+    options: Arc<PgConnectOptions>,
 }
+
+/// Where a fenced pool would connect: a socket that is never there, so
+/// that a connect asked for after the fence fails at once and for good,
+/// with no session opened and no retry (sqlx retries a refused connect,
+/// and one its `after_connect` refused, until the acquire timeout; review
+/// of #98).
+const FENCED_SOCKET: &str = "/nonexistent/kage-store-fenced";
 
 /// The prefix of the `application_name` of a server's sessions; the rest is
 /// the server's own id, so that it can find its own sessions and end them
@@ -142,14 +153,21 @@ impl Store {
             })
             .connect_with(options)
             .await?;
-        Ok(Self { pool, fenced })
+        let options = pool.connect_options();
+        Ok(Self {
+            pool,
+            fenced,
+            options,
+        })
     }
 
     /// Wraps an existing pool.
     pub fn from_pool(pool: PgPool) -> Self {
+        let options = pool.connect_options();
         Self {
             pool,
             fenced: Arc::new(AtomicBool::new(false)),
+            options,
         }
     }
 
@@ -183,6 +201,11 @@ impl Store {
             // cut network may hold up for long.
             let closing = self.pool.close();
             drop(closing);
+            // A connect the pool began before the fence is refused by
+            // its hook once open, and the pool's next try fails at once:
+            // it reads these options, and nothing answers there.
+            self.pool
+                .set_connect_options((*self.options).clone().socket(FENCED_SOCKET));
         }
     }
 
@@ -194,8 +217,7 @@ impl Store {
     /// The `application_name` this store's sessions carry, when it named
     /// them ([`Store::connect`]).
     pub fn application_name(&self) -> Option<String> {
-        self.pool
-            .connect_options()
+        self.options
             .get_application_name()
             .filter(|name| name.starts_with(APPLICATION_NAME_PREFIX))
             .map(str::to_owned)
@@ -218,7 +240,7 @@ impl Store {
         let Some(name) = self.application_name() else {
             return Err(StoreError::Unnamed);
         };
-        let options = (*self.pool.connect_options()).clone();
+        let options = (*self.options).clone();
         let ending = async move {
             let mut connection = PgConnection::connect_with(&options).await?;
             let ended: i64 = sqlx::query_scalar(
