@@ -183,6 +183,13 @@ fn failed(error: &SchedulerError) -> ApiError {
             ErrorCode::Unavailable,
             "the server is stopping; the request was not fetched",
         ),
+        // The database could not be reached: nothing is wrong with the
+        // request, and asking again later may succeed (QA round four
+        // lock-01, review of #98).
+        other if other.is_store_unreachable() => ApiError::new(
+            ErrorCode::Unavailable,
+            "the database cannot be reached now; the request was not fetched",
+        ),
         other => ApiError::internal(other),
     }
 }
@@ -501,6 +508,18 @@ human:
             !panicked.detail().contains("overflowed"),
             "{}",
             panicked.detail()
+        );
+        // Review of #98: a database out of reach is no fault of Kage's
+        // and no fault of the request: asking again later may succeed.
+        // One the database refused for what it is stays Kage's own.
+        let cut = kage_store::StoreError::Unreachable(std::time::Duration::from_secs(3));
+        assert_eq!(
+            failed(&SchedulerError::Store(cut)).code(),
+            ErrorCode::Unavailable
+        );
+        assert_eq!(
+            failed(&SchedulerError::Store(kage_store::StoreError::Unnamed)).code(),
+            ErrorCode::Internal
         );
     }
 }

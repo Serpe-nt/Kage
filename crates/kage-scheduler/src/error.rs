@@ -34,6 +34,23 @@ pub enum SchedulerError {
 }
 
 impl SchedulerError {
+    /// Whether the scheduler failed because the database could not be
+    /// reached: the store, or the store under the persona manager or the
+    /// proxy pool, lost its connection or had none to give (a cut, a fenced
+    /// store; [`StoreError::is_connection`]). Such a failure says nothing
+    /// about the request, and asking again later may succeed (QA round four
+    /// lock-01, review of #98).
+    pub fn is_store_unreachable(&self) -> bool {
+        match self {
+            Self::Store(store)
+            | Self::Pool(PoolError::Store(store))
+            | Self::Persona(
+                PersonaError::Store(store) | PersonaError::Pool(PoolError::Store(store)),
+            ) => store.is_connection(),
+            _ => false,
+        }
+    }
+
     /// What a fetch's task that did not return is: a panic is
     /// [`SchedulerError::Panicked`], a task cancelled by the runtime as it
     /// stops is [`SchedulerError::ShuttingDown`].
@@ -67,5 +84,31 @@ mod tests {
             SchedulerError::of_join(&cancelled),
             SchedulerError::ShuttingDown
         ));
+    }
+
+    /// Review of #98: a database out of reach, under whatever part of the
+    /// scheduler met it, and nothing else, is a store that cannot be
+    /// reached.
+    #[test]
+    fn only_a_database_out_of_reach_is_a_store_that_cannot_be_reached() {
+        use kage_persona::PersonaError;
+        use kage_proxy::PoolError;
+        use kage_store::StoreError;
+        let cut = || StoreError::Unreachable(std::time::Duration::from_secs(3));
+        for unreachable in [
+            SchedulerError::Store(cut()),
+            SchedulerError::Pool(PoolError::Store(cut())),
+            SchedulerError::Persona(PersonaError::Store(cut())),
+            SchedulerError::Persona(PersonaError::Pool(PoolError::Store(cut()))),
+        ] {
+            assert!(unreachable.is_store_unreachable(), "{unreachable}");
+        }
+        for other in [
+            SchedulerError::Store(StoreError::Unnamed),
+            SchedulerError::ShuttingDown,
+            SchedulerError::NoHost("x".to_owned()),
+        ] {
+            assert!(!other.is_store_unreachable(), "{other}");
+        }
     }
 }
