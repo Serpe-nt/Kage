@@ -191,7 +191,7 @@ policy enforces its `robots.txt` (`docs/runbooks/api.md`, "robots.txt").
 | Reason | Meaning | What to do |
 |---|---|---|
 | none | A rule of the file disallows the address; `robots.matched_rule` names it. | Nothing: the site said no. |
-| `robots_unavailable` | The file could not be had (a server error, a timeout, a block of the scout), so nothing of the origin is fetched; `retry_at` says when it is asked for again (`robots.error_ttl`, 1 h). A job's pages of the site wait for it. | Wait, or look at the scout's attempts in the log (`a robots.txt was asked for`). |
+| `robots_unavailable` | The file could not be had (a server error, a timeout, a block of the scout), so nothing of the origin is fetched; `retry_at` says when it is asked for again (`robots.error_ttl`, 1 h, for a file kept as unreachable; a minute when nobody could ask for it, the proxy or the sidecar having failed first). A job's pages of the site wait for it. | Wait, or look at the scout's attempts in the log (`a robots.txt was asked for`). |
 | `robots_no_scout` | Nobody can ask for the file: every persona that could has read the site, or there is only one. | Add a persona, or set `robots: report` for the site. |
 | `robots_enforced`, `robots_ignored` | The request's `robots` and the policy cannot both be had; only seen in a job whose site's policy changed after it was accepted (the API refuses such a request at once). | Send the job again. |
 

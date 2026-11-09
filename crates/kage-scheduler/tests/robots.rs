@@ -710,6 +710,24 @@ async fn a_file_nobody_could_ask_for_is_asked_for_again_a_minute_later() {
     }
     assert_eq!(asked(&world).0.len(), 1, "the file was asked for once");
     assert!(moments.iter().all(|at| *at == moments[0]), "{moments:?}");
+    // A job's page waits for the same moment.
+    let (_keep, stop) = never();
+    let waiting = world
+        .pipeline
+        .fetch_for_job(
+            RequestId::new(),
+            get("https://enforced.example/job"),
+            None,
+            stop,
+        )
+        .await
+        .unwrap();
+    let JobFetch::Deferred(deferred) = waiting else {
+        panic!("the page did not wait: {waiting:?}");
+    };
+    assert_eq!(deferred.reason, Refusal::RobotsUnavailable);
+    assert_eq!(deferred.retry_at, Some(moments[0]));
+    assert_eq!(asked(&world).0.len(), 1);
     assert!(
         world
             .backend
@@ -727,6 +745,42 @@ async fn a_file_nobody_could_ask_for_is_asked_for_again_a_minute_later() {
     assert_eq!(again.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
     assert_eq!(asked(&world).0.len(), 2);
     assert!(again.retry_at.unwrap() > moments[0]);
+    world.shut_down().await;
+}
+
+/// The note of a road nobody could ask on is that road's (review of
+/// #99): the plain client of level 0 failed, and the scout's browser asks
+/// for the file at once and brings it, for every level.
+#[tokio::test(start_paused = true)]
+async fn one_road_that_could_not_ask_keeps_the_other_from_nothing() {
+    let mut world = World::new(4, SITES);
+    world.script.when_plain(|job| {
+        (job.url.path() == "/robots.txt").then(|| {
+            AttemptOutput::failed(
+                Outcome::ProviderError,
+                "proxy_refused",
+                Courtesy::NotTheSite,
+            )
+        })
+    });
+    robots_txt(&world, |url| file(url, 200, RULES));
+    let plain = world
+        .pipeline
+        .fetch(FetchOrder {
+            level: Level::Plain,
+            ..get("https://enforced.example/a")
+        })
+        .await
+        .unwrap();
+    assert_eq!(plain.reason.as_deref(), Some(ROBOTS_UNAVAILABLE));
+    let browser = world
+        .pipeline
+        .fetch(get("https://enforced.example/b"))
+        .await
+        .unwrap();
+    assert_eq!(browser.outcome, Outcome::Ok, "{:?}", browser.reason);
+    assert_eq!(browser.robots, Some(allowed(Some(30.0))));
+    assert_eq!(asked(&world).0.len(), 1);
     world.shut_down().await;
 }
 

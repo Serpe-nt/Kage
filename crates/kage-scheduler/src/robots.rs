@@ -469,9 +469,11 @@ pub struct Desk {
     known: Mutex<HashMap<String, (Instant, Arc<Known>)>>,
     scouts: Mutex<HashMap<String, (Instant, Option<PersonaId>)>>,
     /// The origins whose file nobody could ask for a moment ago (the
-    /// scout's attempt failed before the site had a say): until when
-    /// it is not asked for again, and the moment a refusal names.
-    unanswered: Mutex<HashMap<String, (Instant, DateTime<Utc>)>>,
+    /// attempt failed before the site had a say), by road (the plain
+    /// client of level 0, or the scout's browser): the moment it is
+    /// asked for again on that road, which every refusal meanwhile
+    /// names.
+    unanswered: Mutex<HashMap<(String, bool), DateTime<Utc>>>,
     /// One request per origin at a time: whoever comes second waits for
     /// the first one's answer.
     asking: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -539,24 +541,37 @@ impl Desk {
         scouts.insert(site.to_owned(), (Instant::now(), scout));
     }
 
-    /// The moment to ask an origin's file again, while nobody could ask
-    /// for it a moment ago; `None` when it may be asked for now (spec
-    /// §14: an attempt that failed before the site had a say is tried
-    /// again a minute later; QA round four's pool0-02).
-    pub(crate) fn unanswered(&self, origin: &str) -> Option<DateTime<Utc>> {
+    /// The moment to ask an origin's file again on a road (`plain`: the
+    /// plain client of level 0; else the scout's browser) while nobody
+    /// could ask for it there a moment ago; `None` when it may be asked
+    /// for at `now` (spec §14: an attempt that failed before the site had
+    /// a say is tried again a minute later; QA round four's pool0-02).
+    /// One road's failure never keeps the other from asking.
+    pub(crate) fn unanswered(
+        &self,
+        origin: &str,
+        plain: bool,
+        now: DateTime<Utc>,
+    ) -> Option<DateTime<Utc>> {
         locked(&self.unanswered)
-            .get(origin)
-            .filter(|(until, _)| Instant::now() < *until)
-            .map(|(_, retry_at)| *retry_at)
+            .get(&(origin.to_owned(), plain))
+            .filter(|retry_at| now < **retry_at)
+            .copied()
     }
 
-    /// Notes that nobody could ask for an origin's file: it is not asked
-    /// for again for `wait`, and the refusals meanwhile name `retry_at`.
-    pub(crate) fn note_unanswered(&self, origin: &str, wait: Duration, retry_at: DateTime<Utc>) {
-        let now = Instant::now();
+    /// Notes that nobody could ask for an origin's file on a road: it is
+    /// not asked for there again before `retry_at`, which the refusals
+    /// meanwhile name.
+    pub(crate) fn note_unanswered(
+        &self,
+        origin: &str,
+        plain: bool,
+        now: DateTime<Utc>,
+        retry_at: DateTime<Utc>,
+    ) {
         let mut unanswered = locked(&self.unanswered);
-        unanswered.retain(|_, (until, _)| now < *until);
-        unanswered.insert(origin.to_owned(), (now + wait, retry_at));
+        unanswered.retain(|_, until| now < *until);
+        unanswered.insert((origin.to_owned(), plain), retry_at);
     }
 
     /// The lock of one origin's request.
