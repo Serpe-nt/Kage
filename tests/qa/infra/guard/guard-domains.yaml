@@ -1,0 +1,21 @@
+  # QA round four, guard topic: the extra names of guard.yaml at a test's pace.
+  third.qa.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  xn--bcher-kva.qa.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  deny403.qa.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  deny407.qa.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore
+  deny502.qa.test:
+    pacing: fast
+    min_dwell: 500ms
+    active_hours: ignore

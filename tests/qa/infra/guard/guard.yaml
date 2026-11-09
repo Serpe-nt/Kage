@@ -1,0 +1,24 @@
+# QA round four, guard topic: the e2e world with proxies that log what they
+# receive raw (rawproxy.mjs), the responder on two ports (8091, 8092, as
+# infra/http/multi.mjs) under more names, and proxy answers for the
+# level0-01 roads: deny403/deny407/deny502.qa.test:8091 are answered with
+# that status by every proxy (to a CONNECT and to a plain request alike).
+#   stack.sh up NAME --overlay=/scripts/qa/infra/guard/guard.yaml
+services:
+  responder:
+    command: [/qa/infra/http/multi.mjs]
+    networks:
+      default:
+        aliases: [qa.kage.test, other.qa.test, third.qa.test, xn--bcher-kva.qa.test]
+  proxy-a:
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/infra/guard/rawproxy.mjs, --port, "3128", --user, provider-a, --pass, e2e-only-a, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,qa.kage.test:8092,other.qa.test:8092,third.qa.test:8091,xn--bcher-kva.qa.test:8091", --answer, "deny403.qa.test:8091=403,deny407.qa.test:8091=407,deny502.qa.test:8091=502"]
+  proxy-b:
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/infra/guard/rawproxy.mjs, --port, "3128", --user, provider-b, --pass, e2e-only-b, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,qa.kage.test:8092,other.qa.test:8092,third.qa.test:8091,xn--bcher-kva.qa.test:8091", --answer, "deny403.qa.test:8091=403,deny407.qa.test:8091=407,deny502.qa.test:8091=502"]
+  proxy-c:
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/infra/guard/rawproxy.mjs, --port, "3128", --user, provider-c, --pass, e2e-only-c, --allow, "fixture.kage.test:8088,lenient.kage.test:8088,rules.kage.test:8088,wall.field.test:8088,world.kage.test:8089,qa.kage.test:8091,other.qa.test:8091,qa.kage.test:8092,other.qa.test:8092,third.qa.test:8091,xn--bcher-kva.qa.test:8091", --answer, "deny403.qa.test:8091=403,deny407.qa.test:8091=407,deny502.qa.test:8091=502"]

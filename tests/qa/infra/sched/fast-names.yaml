@@ -1,0 +1,15 @@
+  # Added by the sched agent (round four): plain fast rules for s1..s8 and n1..n6.
+  s1.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  s2.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  s3.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  s4.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  s5.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  s6.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  s7.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  s8.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  n1.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  n2.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  n3.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  n4.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  n5.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  n6.qa.test: { pacing: fast, min_dwell: 500ms, active_hours: ignore }

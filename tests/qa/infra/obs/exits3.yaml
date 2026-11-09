@@ -1,0 +1,12 @@
+# QA round four, obs: the default world's three proxies, each with an exit
+# address of its own as the health probe reads it (round two's
+# infra/pool/echo.mjs in place of `world.mjs echo`), so that a test can make
+# two proxies share an exit (POST world:8089/__set) and watch F195's
+# `kage_proxy_state`.
+#   exits: proxy-a 203.0.113.10 AS64501, proxy-b 198.51.100.20 AS64502,
+#          proxy-c 192.0.2.30 AS64503
+services:
+  world:
+    command: [/pool/echo.mjs, --port, "8089", --exits, "proxy-a=203.0.113.10|AS64501;proxy-b=198.51.100.20|AS64502;proxy-c=192.0.2.30|AS64503"]
+    volumes:
+      - /scripts/qa/infra/pool:/pool:ro

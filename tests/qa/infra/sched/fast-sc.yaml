@@ -1,0 +1,9 @@
+  # Added by the sched agent (round four): sc1..sc8.test enforce robots.txt.
+  sc1.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  sc2.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  sc3.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  sc4.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  sc5.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  sc6.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  sc7.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }
+  sc8.test: { robots: enforce, pacing: fast, min_dwell: 500ms, active_hours: ignore }

@@ -1,0 +1,30 @@
+# QA round four, guard topic (guard-04): a receiver on port 25 of the
+# operator's own network, hooks25.kage.test:25 (the round's responder.mjs, which
+# logs every request at GET /__log). Kage lists it in webhooks.allowed_origins
+# and webhooks.private_origins.
+#   stack.sh up NAME --overlay=/scripts/qa/infra/guard/hooks25.yaml \
+#     'KAGE__WEBHOOKS__ALLOWED_ORIGINS=["http://hooks.kage.test:8090","http://hooks25.kage.test:25"]' \
+#     'KAGE__WEBHOOKS__PRIVATE_ORIGINS=["http://hooks.kage.test:8090","http://hooks25.kage.test:25"]'
+services:
+  hooks25:
+    image: ${KAGE_BROWSER_CHROMIUM_IMAGE:-kage-browser-chromium:dev}
+    entrypoint: [node]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    restart: "no"
+    init: true
+    mem_limit: 128m
+    volumes:
+      - /scripts/qa:/qa:ro
+    command: [/qa/responder.mjs, --port, "25"]
+    healthcheck:
+      test: [CMD, node, -e, "require('node:http').get('http://127.0.0.1:25/__log', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks:
+      default:
+        aliases: [hooks25.kage.test]
