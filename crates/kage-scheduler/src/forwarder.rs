@@ -1221,9 +1221,9 @@ enum Refused {
     /// The target could not be reached (no address that answered), or the
     /// client went away: not the proxy's own failure.
     Unreached(String),
-    /// The proxy answered the tunnel with this status, neither a success
-    /// nor a `4xx` (a `502`, `503` or `504`): its exit could not reach
-    /// the target, or it is overloaded now. The target's failed
+    /// The proxy answered the tunnel with this `5xx` (a `502`, `503` or
+    /// `504`): its exit could not reach the target, or it is overloaded
+    /// now. The target's failed
     /// connection, never the proxy's (spec §8.3, F108; QA round four's
     /// guard-03).
     TargetUnreached(u16),
@@ -2095,23 +2095,28 @@ impl Forwarder {
     }
 }
 
-/// Ends a connection that is not relayed. A tunnel that is refused is a
-/// failed connection to the browser; a plain request gets no answer at
-/// all, so that no page reads a response the forwarder wrote.
 /// What a proxy's answer to a tunnel other than a success or a `407` is,
 /// `None` for a success. A `4xx` is the provider's refusal of the target
 /// (its blocklist, its policy), alike for every proxy of it: neither the
-/// proxy's failure nor the site's answer (F189). Any other (a `502`, `503`
+/// proxy's failure nor the site's answer (F189). A `5xx` (a `502`, `503`
 /// or `504`: a target the exit could not reach, a proxy overloaded now) is
-/// the target's failed connection, not the proxy's (F108, guard-03).
+/// the target's failed connection, not the proxy's (F108, guard-03). Any
+/// other (a `1xx`, a `3xx`: a proxy that does not speak `CONNECT` as it
+/// should, a captive portal) is the proxy's own failure.
 fn tunnel_refusal(status: u16) -> Option<Refused> {
     match status {
         200..=299 => None,
         400..=499 => Some(Refused::Tunnel(status)),
-        _ => Some(Refused::TargetUnreached(status)),
+        500..=599 => Some(Refused::TargetUnreached(status)),
+        _ => Some(Refused::Upstream(format!(
+            "the proxy answered the tunnel with {status}"
+        ))),
     }
 }
 
+/// Ends a connection that is not relayed. A tunnel that is refused is a
+/// failed connection to the browser; a plain request gets no answer at
+/// all, so that no page reads a response the forwarder wrote.
 async fn refuse(client: &mut TcpStream, tunnel: bool, reason: Refused) -> Result<(), Refused> {
     if tunnel {
         let _ = client
@@ -2813,11 +2818,18 @@ mod tests {
             assert_eq!(super::tunnel_refusal(status), Some(Refused::Tunnel(status)));
         }
         // A target the exit could not reach, a proxy overloaded now: the
-        // target's failed connection (F108), never a refusal.
-        for status in [301, 500, 502, 503, 504] {
+        // target's failed connection (F108, guard-03), never a refusal.
+        for status in [500, 502, 503, 504, 599] {
             assert_eq!(
                 super::tunnel_refusal(status),
                 Some(Refused::TargetUnreached(status)),
+                "{status}"
+            );
+        }
+        // Anything else is a proxy that failed at `CONNECT`.
+        for status in [100, 101, 301, 302, 600] {
+            assert!(
+                matches!(super::tunnel_refusal(status), Some(Refused::Upstream(_))),
                 "{status}"
             );
         }

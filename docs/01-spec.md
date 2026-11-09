@@ -963,6 +963,8 @@ at `info`, and an attempt its client reports as a failed tunnel or proxy
 (Chrome's `ERR_TUNNEL_CONNECTION_FAILED`, the http client's failed
 `CONNECT`) is `connection_failed` (`navigation_failed` for a browser's
 page), the site's, with a server error's courtesy; the pool is not told.
+Any other answer to a tunnel than a success, a `4xx` or a `5xx` (a
+`3xx`, a `1xx`) is the proxy's own failure.
 A proxy that answers a tunnel with a `4xx` other than `407` refuses the
 target by its provider's policy (a blocklist), alike for every proxy of
 that provider, and works; the forwarder notes the refusal by caller and by
