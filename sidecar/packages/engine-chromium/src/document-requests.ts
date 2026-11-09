@@ -211,7 +211,10 @@ export class DocumentRequests {
    * revalidated a page it kept and the network answered `304` (F178): the
    * kept response, updated by the 304's fields, as the debugger announced
    * it with the document. The driver gives the wire's header lines and
-   * the kept status there. `null` for any other document.
+   * the kept status there. Its lines come in the order of the debugger's
+   * header object, not the site's: the head's text it quotes is the 304's
+   * own, so the order the page was once sent in is not known here (QA
+   * round four, b85-02). `null` for any other document.
    */
   revalidated(url: string): ShownAnswer | null {
     const shown = this.latest?.shown ?? null;

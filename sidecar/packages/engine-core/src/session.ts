@@ -819,6 +819,14 @@ interface DocumentState {
    * the page went.
    */
   sentTo: string | null;
+  /**
+   * The driver's words for a flow's `goto` the browser broke off at an
+   * answer that holds no page (a `204` or `205`, or a `304` it kept no page
+   * for): the step went where it was sent, and the capture reports the
+   * answer as a typed address's (QA round four, b85-01). `null` once a
+   * response came after it, and for every other document.
+   */
+  brokenOff: NavigationError | null;
 }
 
 const newDocument = (restored: string | null = null): DocumentState => ({
@@ -833,6 +841,7 @@ const newDocument = (restored: string | null = null): DocumentState => ({
   bodies: [],
   proxyChallenged: false,
   sentTo: null,
+  brokenOff: null,
 });
 
 const withoutFragment = (url: string) => url.split('#')[0] ?? '';
@@ -1415,6 +1424,7 @@ export class PageSession {
       // The latest one counts: after a challenge resolved itself, the
       // document behind it is the result.
       this.document.response = response;
+      this.document.brokenOff = null;
       this.document.ttfb ??= Date.now() - this.document.started;
       // A redirect sends the tab on, though no request may follow it: one
       // to an address the browser refuses to ask for (a `file:` URL).
@@ -1750,6 +1760,20 @@ export class PageSession {
         .map((frame) => frame.url())
         .filter((url) => url !== '' && url !== 'about:blank' && !url.startsWith('about:srcdoc')),
     };
+  }
+
+  /**
+   * The answer the browser broke a load off at and its driver names no
+   * response for (Chrome's `304` it kept no page for, class-02), at
+   * `target`, the load's last address. Only where the document has no
+   * response, or only the redirect that led there (QA round four,
+   * b85-01): a document that came is no such answer.
+   */
+  private unshownAnswer(response: DriverResponse | null, target: string): ShownHead | null {
+    if (response !== null && redirectTarget(response) === null) {
+      return null;
+    }
+    return this.parts.driver.unshownAnswer?.(target) ?? null;
   }
 
   private async redirects(response: DriverResponse | null): Promise<RedirectHop[]> {
@@ -2360,7 +2384,6 @@ export class PageSession {
             () => null,
           );
     const failedThere = isBrowserErrorPage(shown) || errorDocument !== null;
-    const response = failedThere ? null : seenResponse;
     // A redirect the browser refused to follow, which its driver never saw
     // (Chrome's to a scheme it does not load): the hops and where the last
     // one pointed, so that the chain check sees the refused hop (F167).
@@ -2375,13 +2398,17 @@ export class PageSession {
       seenSentTo !== null && withoutFragment(seenSentTo) !== loadedAt ? seenSentTo : null;
     const errorTarget = errorDocument === null ? null : errorPageTarget(errorDocument);
     const sentTo = refusedTo ?? sentOn ?? errorTarget ?? seenSentTo;
+    // Where the browser broke the load off at an answer that holds no
+    // page: the driver's words, a typed address's or a flow `goto`'s
+    // (QA round four, b85-01).
+    const brokenOff = extra.error?.code === 'aborted' ? extra.error : state.brokenOff;
     // An answer the browser broke the load off at and its driver names no
-    // response for (Chrome's `304` it kept no page for): its status and
-    // head are the site's, nothing of the tab is (class-02).
+    // response for (Chrome's `304` it kept no page for), a redirect before
+    // it included: its status and head are the site's, its address the
+    // result's, nothing of the tab is (class-02, b85-01).
     const unshown =
-      seenResponse === null && !failedThere && extra.error?.code === 'aborted'
-        ? (driver.unshownAnswer?.(sentTo ?? url) ?? null)
-        : null;
+      !failedThere && brokenOff !== null ? this.unshownAnswer(seenResponse, sentTo ?? url) : null;
+    const response = failedThere || unshown !== null ? null : seenResponse;
     // Where the tab was sent after the document it shows and nothing came
     // back by now: a click to a later site that never answered is that
     // site's timeout, not the shown page's (QA round three, flows-04). The
@@ -2454,7 +2481,7 @@ export class PageSession {
         : toHeaders(
             shownHead?.headers ?? (await this.answer(response.headersArray()).catch(() => [])),
           );
-    const seen = await this.redirects(failedThere ? seenResponse : response);
+    const seen = await this.redirects(failedThere || unshown !== null ? seenResponse : response);
     const redirects = seen.length === 0 && unanswered.length > 0 ? unanswered : seen;
     const xhr = new XhrCollector(options.xhr);
     for (const record of failedThere ? [] : state.xhr) {
@@ -2507,11 +2534,13 @@ export class PageSession {
       final_url:
         failedThere || refusedTo !== null
           ? (sentTo ?? url)
-          : empty
-            ? withoutFragment(response?.url() ?? url)
-            : loaded
-              ? shown
-              : url,
+          : unshown !== null
+            ? withoutFragment(sentTo ?? url)
+            : empty
+              ? withoutFragment(response?.url() ?? url)
+              : loaded
+                ? shown
+                : url,
       status: shownHead?.status ?? response?.status() ?? replacedStatus ?? unshown?.status ?? null,
       http_version:
         response === null || unanswering !== null
@@ -2553,6 +2582,9 @@ export class PageSession {
             }
           : null) ??
         extra.error ??
+        // A flow `goto` the site answered with no page reads as the typed
+        // address so answered does (QA round four, b85-01).
+        state.brokenOff ??
         (this.unanswering === null
           ? null
           : { code: this.unanswering.code, message: this.unanswering.message, net_error: null }) ??
@@ -2845,6 +2877,9 @@ export class PageSession {
     this.remembered = new Map();
     const snapshot = async (options: CaptureOptions, error: NavigationError | null) => {
       if (
+        // A `goto` the site answered with no page leaves the tab on the
+        // page before by design: that answer is the flow's page (b85-01).
+        this.document.brokenOff === null &&
         loadedFrom(this.document) !== null &&
         !isBrowserErrorPage(page.url()) &&
         withoutFragment(page.url()) !== loadedFrom(this.document)
@@ -2902,6 +2937,18 @@ export class PageSession {
         } catch (thrown) {
           const error = driver.classifyError(thrown);
           await driver.settleAfterFailure(error);
+          if (
+            error.code === 'aborted' &&
+            (noContentStatus(this.document.response) !== null ||
+              this.unshownAnswer(this.document.response, this.document.sentTo ?? url) !== null)
+          ) {
+            // The site answered with no page (a `204` or `205`, a `304` the
+            // browser kept no page for), a redirect before it included: the
+            // step went where it was sent, as a typed address does, and the
+            // capture reports the answer (QA round four, b85-01).
+            this.document.brokenOff = error;
+            return;
+          }
           throw new Error(`${error.code}: ${error.message}`, { cause: thrown });
         }
         if (arrived === SHOWS_ERROR_PAGE) {

@@ -467,7 +467,12 @@ driver reports the kept status (`200`) and the wire's header lines, the
 the 304's fields. Where the wire's status of the main frame's latest
 document request was `304` and the announced one is not, the result has
 the announced status and head (F178), as the Firefox engine reports such a
-page from the heads it keeps. Every other page has the wire's lines in
+page from the heads it keeps. That head comes in the order of the
+debugger's header object (Chrome 155: the 304's fields first, then the
+kept ones by name), over any protocol, not the site's: its `headersText`
+is the 304's own, so the order the site once sent the page in is not
+known here (Firefox's kept heads keep it; QA round four, b85-02). Every
+other page has the wire's lines in
 the order the site sent them: the driver gives Chrome's lines sorted by
 name (the debugger's header object holds them so), and
 `Network.responseReceivedExtraInfo` carries the head as it came over the

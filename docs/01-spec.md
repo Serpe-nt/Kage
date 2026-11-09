@@ -1344,16 +1344,22 @@ S1). A navigation that fails is a page result too, with a typed `error`
 was captured until then. A navigation the browser broke off because the
 site's answer holds no page is no failure (F116, F120): a `204` or `205`
 (the tab stays on what it showed, and nothing of that is returned) is
-`ok` with its status, as at level 0, typed or clicked, and its `final_url`
-is the answer's address, not the page the tab still shows: a click so
-answered, a redirect before it included, ends its wait at once and was
-come to by the link (crawl-02). A `304` to a typed address the browser
-kept no page for (a server that answers `304` to a request that asked for
-no revalidation) is `ok` with its status too: Chrome breaks the load off
-as at a `204` and its engine reports the wire's `304` and its fields,
-which its debugger heard, and Camoufox shows it, so both are `ok` with the
-site's `304`, and no address of it went unanswered (QA round three,
-class-02: Chrome's was `provider_error`, `aborted`, with no status). A file the browser saved and showed
+`ok` with its status, as at level 0, typed (a flow's `goto` included) or
+clicked, and its `final_url` is the answer's address, not the page the tab
+still shows: a click so answered, a redirect before it included, ends its
+wait at once and was come to by the link (crawl-02); a flow's `goto` so
+answered is a step that went where it was sent, and the flow goes on (QA
+round four, b85-01: the step failed `aborted` in both engines). A `304`
+to a typed address the browser kept no page for (a server that answers
+`304` to a request that asked for no revalidation), a redirect before it
+included and a flow's `goto` too, is `ok` with its status as well:
+Chrome breaks the load off as at a `204` and its engine reports the
+wire's `304` and its fields, which its debugger heard, at the 304's
+address, and Camoufox shows it, so both are `ok` with the site's `304`,
+and no address of it went unanswered (QA round three, class-02: Chrome's
+was `provider_error`, `aborted`, with no status; QA round four, b85-01:
+behind a redirect Chrome's was `provider_error`, `aborted`, status `302`
+at `about:blank`, and a flow's `goto` failed). A file the browser saved and showed
 nothing of (a typed address answered with `Content-Disposition:
 attachment`, or a click with no entry report and no status) is `ok` with
 the reason `download` and no page, and no body either, in both engines:
@@ -3007,7 +3013,12 @@ As built (the OpenAPI document is the contract):
   engine reads the order from the head as its debugger quotes it from the
   wire, where it has one (HTTP/1), and over HTTP/2 and HTTP/3, where it
   has none, Chrome's lines stay sorted by name (QA round three,
-  browser-04: every Chrome page's lines came sorted).
+  browser-04: every Chrome page's lines came sorted). A page Chrome
+  revalidated (below) has its lines in the order its debugger announces
+  the kept head brought up to date, over any protocol, not the site's: the
+  debugger quotes only the 304's own lines from the wire, so the order the
+  site once sent the page in is nowhere to be read. Firefox's come in the
+  order it kept them (QA round four, b85-02).
 - `status` and `headers` of a browser's page are those of the response the
   tab shows. For a page the browser revalidated (it asked with its
   validators and was answered `304 Not Modified`) that is the page it
