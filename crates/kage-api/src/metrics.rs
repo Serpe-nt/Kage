@@ -103,13 +103,33 @@ pub fn install() -> Result<MetricsHandle, BuildError> {
 /// (the security review's L3), the domains the policy files name labelled
 /// first, in their order: a flood of hosts right after a start cannot push
 /// the operator's own sites into `other`. A domain a later reload names
-/// gets a label of its own while room is left. Once, at the start of the
-/// server, before anything records.
+/// gets a label of its own while room is left ([`name_reloaded`]). Once, at
+/// the start of the server, before anything records.
 pub fn bound_domains(server: &ServerConfig, policies: &PolicySet) {
     kage_scheduler::metrics::bound_domains(
         usize::try_from(server.metrics_max_domains).unwrap_or(usize::MAX),
         policies.domains.domains().keys().map(String::as_str),
     );
+}
+
+/// Names the domains a reloaded policy names for the `domain` label while
+/// room is left, and says which got none: their series are counted under
+/// `other`, with no breaker threshold, until the next start names the
+/// policy files' domains first (QA round four, obs-01). Called by the
+/// policy store after every reload that took effect.
+pub fn name_reloaded(policies: &PolicySet) {
+    let left = kage_scheduler::metrics::name_reloaded(
+        policies.domains.domains().keys().map(String::as_str),
+    );
+    if let Some(first) = left.first() {
+        tracing::warn!(
+            domains = left.len(),
+            first = %first,
+            "domains the reloaded policies name have no metrics label of their own: \
+             server.metrics_max_domains is reached, so they are counted as domain=\"other\" \
+             (with no breaker threshold) until the next start names the policies' domains first"
+        );
+    }
 }
 
 /// The values of `kage_webhook_deliveries_total{result}`.

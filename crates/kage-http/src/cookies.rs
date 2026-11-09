@@ -708,7 +708,11 @@ impl CookieStore for HopCookies {
             let text = String::from_utf8_lossy(header.as_bytes());
             let verdict = self.jar.store(&self.url, &text, now);
             if let SetCookieVerdict::Rejected(reason) = verdict {
-                tracing::debug!(host = ?self.url.host_str(), reason, "ignored a Set-Cookie header");
+                tracing::debug!(
+                    host = self.url.host_str(),
+                    reason,
+                    "ignored a Set-Cookie header"
+                );
             }
         }
     }

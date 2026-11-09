@@ -111,16 +111,42 @@ fn options() -> serde_saphyr::Options {
 /// What a figment error says, and, where text was expected and YAML read a
 /// number or a boolean, that such text is written in quotes.
 pub(crate) fn explain(error: figment::Error) -> String {
-    let text = error.to_string();
-    let read_as_text = error.into_iter().any(|one| {
-        matches!(
+    explain_from(error, |_| None)
+}
+
+/// What a figment error says, each problem as `key: what`, the key as the
+/// document writes it (no figment profile in front of it), and where
+/// `origin` knows it, where the value came from: an environment variable,
+/// a file. Never the provider's own name, which is a Rust type's or "YAML
+/// source string" (QA round four, api-03). Where text was expected and
+/// YAML read a number or a boolean, the message says such text is written
+/// in quotes.
+pub(crate) fn explain_from(
+    error: figment::Error,
+    origin: impl Fn(&[String]) -> Option<String>,
+) -> String {
+    let mut read_as_text = false;
+    let mut problems = Vec::new();
+    for one in error {
+        read_as_text |= matches!(
             &one.kind,
             Kind::InvalidType(
                 Actual::Float(_) | Actual::Signed(_) | Actual::Unsigned(_) | Actual::Bool(_),
                 expected,
             ) if expected.contains("string")
-        )
-    });
+        );
+        let key = one.path.join(".");
+        let mut problem = if key.is_empty() {
+            one.kind.to_string()
+        } else {
+            format!("{key}: {}", one.kind)
+        };
+        if let Some(from) = origin(&one.path) {
+            problem = format!("{problem} (from {from})");
+        }
+        problems.push(problem);
+    }
+    let text = problems.join("; ");
     if read_as_text {
         format!(
             "{text}; text that YAML reads as a number or a boolean is written in quotes, \
@@ -174,11 +200,17 @@ mod tests {
         let unknown =
             from_str::<Sample>("name: x\ncountries: []\nhosts: {}\nextra: 1\n").unwrap_err();
         assert!(unknown.contains("extra"), "{unknown}");
-        // Where it was read: the document, not a default.
-        assert!(unknown.contains("YAML source string"), "{unknown}");
+        // Nothing of figment's inside: no provider's name, no profile (QA
+        // round four, api-03).
+        assert!(!unknown.contains("YAML source string"), "{unknown}");
+        assert!(!unknown.contains("default."), "{unknown}");
 
         let missing = from_str::<Sample>("name: x\n").unwrap_err();
         assert!(missing.contains("countries"), "{missing}");
+        // A nested key is named by its path, as the document writes it.
+        let nested =
+            from_str::<Sample>("name: x\ncountries: []\nhosts: {a.example: x}\n").unwrap_err();
+        assert!(nested.starts_with("hosts.a.example: "), "{nested}");
 
         assert!(from_str::<Sample>("name: [unclosed").is_err());
         assert!(from_str::<Sample>("").is_err());

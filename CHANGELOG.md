@@ -667,6 +667,70 @@ version's date is the day, in UTC, its tag was made.
   `retry_at`. The fetches of the next minute are refused
   `robots_unavailable` with the same `retry_at`, and nobody asks, as
   spec §14 says.
+- **A fetch carried on as a job is not a job of the key's bound (QA round
+  four, api-05).** `jobs.max_open_per_key` counted a fetch carried on as a
+  job (`origin: sync_overflow`) though nothing held such fetches to it: a
+  key with a bound of 1 held 6, and a client that never made a job was told
+  `jobs_limited` for jobs it did not ask for. The bound is the jobs a key
+  asks for; a carried fetch is never refused by it and no longer counted
+  in it, and the key's limits on fetches (`max_concurrent`,
+  `requests_per_minute`, `daily_page_budget`) hold it (spec §16.2, the
+  security review's L2).
+- **A warm-up site carries no credentials (QA round four, api-01).**
+  `personas.warmup.sites[].url` took an `https` URL with a password, which
+  `kage config check` printed and every persona would have sent; over
+  `http` the refusal repeated it. It is refused, and every refusal of a
+  site names it by its place (`personas.warmup.sites[2]`), never repeating
+  it.
+- **Every `429` in the API document says it carries `Retry-After` (QA
+  round four, api-02).** `POST /v1/fetch` and `POST /v1/jobs` document a
+  `429` of their own, which did not declare the header every `429`
+  carries; a client generated from the document now knows it.
+- **A refused configuration value names its key and where it came from
+  (QA round four, api-03).** The message said `"global.robots.ttl" in
+  (alloc::string::String, figment::value::value::Value)` for an
+  environment variable and "YAML source string" for the file. It now says
+  `robots.ttl: ... (from the environment variable KAGE__ROBOTS__TTL)` or
+  the file's path, and a policy file's refusal names its key without
+  figment's profile.
+- **A purge before 4713 BC is the caller's value (QA round four, api-04).**
+  `POST /v1/admin/purge` with a `before` earlier than Postgres keeps
+  failed inside the store, `500 internal`; it is `422 validation_failed`
+  with `field: before`.
+- **A crawl's refusal never repeats a seed's password (QA round four,
+  api-06).** A seed with credentials was refused, and the problem document
+  repeated it whole in `seed`; that member is left out for such a seed,
+  `item` naming it, as a fetch, a batch, a flow and a webhook refuse one.
+- **A CORS origin is written as a browser sends it (QA round four,
+  api-07).** An origin in upper case or with its scheme's own port (`:443`)
+  was taken without a word and matched nothing a browser sends. It is
+  refused at load with the form that would, as F136 refuses a wildcard.
+  **Upgrade note:** a server whose `server.cors_allowed_origins` holds
+  such an entry no longer starts; write it as the message says.
+- **The forwarder's refusal of a credential names its caller as every line
+  does (QA round four, guard-01).** F211's line wrote the persona as
+  `Some(PersonaId(..))` and a plain client as `None`; it writes `persona`
+  with the id, `proxy` or `plain` for a plain client. The http client's
+  debug lines write their `host` as the host, not `Some("..")`.
+- **G3 reaches a private webhook receiver (QA round four, guard-04).** A
+  webhook on a port the browsers refuse (`:25`, `:025`) was accepted and
+  posted to when its origin was listed in `webhooks.private_origins`,
+  which skipped the guard and with it the port check. It is `422
+  ssrf_denied` whatever list its origin is on, and an origin of either
+  list on such a port is refused at load. **Upgrade note:** such an origin
+  stops a server from starting.
+- **A domain a reload adds is labelled while room is left, and the
+  server says when it is not (QA round four, obs-01).** A domain a policy
+  reload named after the `domain` label bound filled was counted as
+  `other`, with no breaker threshold, until a restart, and nothing said
+  so. A reload now names its domains at once while room is left, logs a
+  warning naming how many got none and the first, and the spec, the
+  example configuration and the observability runbook say what `other` is
+  and that the next start gives them their labels.
+- **The `no_persona` row of the fetching runbook says when to ask again
+  (QA round four, sched-02).** It said "a minute on" when every proxy is in
+  backoff; since F156 `retry_at` is the first backoff's end, else a minute
+  on when nobody knows.
 
 ### Changed
 

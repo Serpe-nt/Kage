@@ -785,7 +785,8 @@ impl HttpClient {
         }
         tracing::debug!(
             proxy = %self.proxy,
-            host = ?fetched.final_url.host_str(),
+            // The host itself, never `Some("..")` (QA round four, guard-01).
+            host = fetched.final_url.host_str(),
             status = fetched.status,
             redirects = trail.redirects(),
             http_version,

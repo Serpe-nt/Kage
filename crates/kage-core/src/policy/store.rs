@@ -168,7 +168,12 @@ pub struct PolicyStore {
     current: RwLock<Arc<PolicySet>>,
     alerts: Arc<dyn AlertSink>,
     cache_bound: Option<Duration>,
+    on_reload: Option<ReloadHook>,
 }
+
+/// What a store does with a policy that a reload put in force, besides
+/// holding it ([`PolicyStore::with_reload_hook`]).
+pub type ReloadHook = Arc<dyn Fn(&PolicySet) + Send + Sync>;
 
 impl std::fmt::Debug for PolicyStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -196,7 +201,18 @@ impl PolicyStore {
             current: RwLock::new(Arc::new(set)),
             alerts,
             cache_bound: None,
+            on_reload: None,
         })
+    }
+
+    /// The same store, telling `hook` of every policy a reload puts in
+    /// force (not of the one it opened with, nor of a reload that failed):
+    /// the server names a reload's domains for the metrics with it (QA
+    /// round four, obs-01).
+    #[must_use]
+    pub fn with_reload_hook(mut self, hook: ReloadHook) -> Self {
+        self.on_reload = Some(hook);
+        self
     }
 
     /// The same store, held to the configuration's `cache.max_ttl`: the
@@ -250,6 +266,9 @@ impl PolicyStore {
                     signature_rules = set.signatures.rules().len(),
                     "policies reloaded"
                 );
+                if let Some(hook) = &self.on_reload {
+                    hook(&set);
+                }
                 Ok(set)
             }
             Err(error) => {
@@ -551,6 +570,38 @@ rules:
         );
         assert_eq!(alerts.alerts(), []);
         assert!(format!("{store:?}").contains("PolicyStore"));
+    }
+
+    /// QA round four, obs-01: the hook hears of every policy a reload puts
+    /// in force, with that policy, and of nothing else (not the one opened
+    /// with, not a reload that failed).
+    #[test]
+    fn a_reload_hook_hears_of_each_policy_a_reload_put_in_force() {
+        let dir = policy_dir();
+        let sink: Arc<dyn AlertSink> = Arc::new(MemoryAlertSink::new());
+        let heard: Arc<std::sync::Mutex<Vec<usize>>> = Arc::default();
+        let listener = Arc::clone(&heard);
+        let store = PolicyStore::open(dir.path(), sink).unwrap();
+        let store = store.with_reload_hook(Arc::new(move |set: &PolicySet| {
+            listener
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(set.domains.domains().len());
+        }));
+        let opened = store.current().domains.domains().len();
+        assert_eq!(*heard.lock().unwrap(), Vec::<usize>::new());
+
+        std::fs::write(
+            dir.path().join(DOMAINS_FILE),
+            format!("{DOMAINS}  added.example:\n    min_level: 2\n"),
+        )
+        .unwrap();
+        store.reload().unwrap();
+        assert_eq!(*heard.lock().unwrap(), vec![opened + 1]);
+
+        std::fs::write(dir.path().join(DOMAINS_FILE), "domains: [broken\n").unwrap();
+        assert!(store.reload().is_err());
+        assert_eq!(*heard.lock().unwrap(), vec![opened + 1]);
     }
 
     #[test]

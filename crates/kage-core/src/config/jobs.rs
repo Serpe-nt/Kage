@@ -351,6 +351,19 @@ pub(super) fn validate(jobs: &JobsConfig, webhooks: &WebhooksConfig) -> Result<(
                      scheme, a host, an optional port, nothing else: no credentials, no path)"
                 ));
             }
+            // G3 for every receiver, a private one too: a service on a port
+            // the browsers refuse is no web server (QA round four,
+            // guard-04).
+            if let Some(port) = Url::parse(origin)
+                .ok()
+                .and_then(|url| url.port_or_known_default())
+                .filter(|&port| crate::ssrf::is_unsafe_port(port))
+            {
+                return Err(format!(
+                    "{key}[{index}] names port {port}, one browsers refuse to connect to: a \
+                     webhook receiver there is no web server"
+                ));
+            }
         }
     }
     for origin in &webhooks.private_origins {
@@ -691,6 +704,32 @@ mod tests {
                 "{message}"
             );
             assert!(!message.contains("pw-6c1e"), "{message}");
+        }
+        // QA round four, guard-04: a receiver on a port the browsers refuse
+        // is refused on either list, however the port is spelt.
+        for key in ["allowed", "private"] {
+            for entry in [
+                "http://hooks25.lan:25",
+                "http://hooks25.lan:025",
+                "https://irc.lan:6697",
+            ] {
+                let mut listed = WebhooksConfig {
+                    allowed_origins: vec!["https://hooks.example.org".to_owned()],
+                    ..webhooks.clone()
+                };
+                if key == "allowed" {
+                    listed.allowed_origins.push(entry.to_owned());
+                } else {
+                    // The port is checked before whether it is listed.
+                    listed.private_origins.push(entry.to_owned());
+                }
+                let message = refused(jobs, &listed);
+                assert!(
+                    message.starts_with(&format!("webhooks.{key}_origins[")),
+                    "{entry}: {message}"
+                );
+                assert!(message.contains("browsers refuse"), "{entry}: {message}");
+            }
         }
         // A private origin that no job may name anyway is a mistake.
         let unlisted = WebhooksConfig {

@@ -174,11 +174,23 @@ fn a_url_key_refuses_credentials_and_never_repeats_them() {
             "KAGE__SELFTEST__BROWSER__PAGES",
             "[{id=\"own\",kind=\"echo\",url=\"https://u:p4ss-w0rd@echo.test/\"}]",
         ),
+        // QA round four, api-01: taken and printed before, and over http
+        // repeated in the refusal.
+        (
+            "KAGE__PERSONAS__WARMUP__SITES",
+            "[{url=\"https://u:p4ss-w0rd@warm.test/\"}]",
+        ),
+        (
+            "KAGE__PERSONAS__WARMUP__SITES",
+            "[{url=\"http://u:p4ss-w0rd@warm.test/\"}]",
+        ),
     ] {
         let message = refused(Config::load(None, with(&[(name, value)])));
         assert!(!message.contains("p4ss-w0rd"), "{name}: {message}");
         assert!(
-            message.contains("credentials") || message.contains("not an origin"),
+            message.contains("credentials")
+                || message.contains("not an origin")
+                || message.contains("not an https URL"),
             "{name}: {message}"
         );
     }
@@ -337,4 +349,58 @@ fn a_wildcard_is_no_private_name_and_no_origin() {
         message.starts_with("server.cors_allowed_origins"),
         "{message}"
     );
+}
+
+#[test]
+fn a_refused_value_names_its_key_and_where_it_came_from() {
+    // QA round four, api-03: the message said `"global.robots.ttl" in
+    // (alloc::string::String, figment::value::value::Value)` for a variable,
+    // and "YAML source string" for the file, naming neither.
+    let from_env = refused(Config::load(None, with(&[("KAGE__ROBOTS__TTL", "3651d")])));
+    assert!(from_env.starts_with("robots.ttl: "), "{from_env}");
+    assert!(from_env.contains("at most 3650d"), "{from_env}");
+    assert!(
+        from_env.contains("the environment variable KAGE__ROBOTS__TTL"),
+        "{from_env}"
+    );
+    let typed = refused(Config::load(
+        None,
+        with(&[("KAGE__JOBS__MAX_ITEMS", "abc")]),
+    ));
+    assert!(typed.starts_with("jobs.max_items: "), "{typed}");
+    assert!(typed.contains("KAGE__JOBS__MAX_ITEMS"), "{typed}");
+    // A member of a list a variable set is that variable's.
+    let member = refused(Config::load(
+        None,
+        with(&[("KAGE__PERSONAS__WARMUP__SITES", "[{url={a=1}}]")]),
+    ));
+    assert!(member.contains("KAGE__PERSONAS__WARMUP__SITES"), "{member}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("kage.yaml");
+    std::fs::write(&file, "robots:\n  ttl: 3651d\n").unwrap();
+    let from_file = refused(Config::load(Some(&file), with(&[])));
+    assert!(from_file.starts_with("robots.ttl: "), "{from_file}");
+    assert!(
+        from_file.contains(&file.display().to_string()),
+        "{from_file}"
+    );
+    // The environment wins over the file, and is named.
+    let both = refused(Config::load(
+        Some(&file),
+        with(&[("KAGE__ROBOTS__TTL", "9999d")]),
+    ));
+    assert!(both.contains("KAGE__ROBOTS__TTL"), "{both}");
+
+    for message in [&from_env, &typed, &member, &from_file, &both] {
+        for inside in [
+            "alloc::",
+            "figment::",
+            "YAML source string",
+            "global.",
+            "default.",
+        ] {
+            assert!(!message.contains(inside), "{inside}: {message}");
+        }
+    }
 }

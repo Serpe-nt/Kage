@@ -69,7 +69,7 @@ working, `kage key revoke <id>` otherwise, then read what it did:
 | Requests per minute, per key | 60 | `429 rate_limited`, `limit: requests_per_minute` |
 | Requests in flight, per key | 4 | `429 concurrency_limited`; a fetch whose client hangs up gives its slot back and leaves the queue (F128) |
 | Pages a day (UTC), per key | none | `429 budget_exhausted`; `Retry-After` is the time to midnight UTC |
-| Open jobs (queued, running, paused), per key | `jobs.max_open_per_key` 20 | `429 jobs_limited` with `open_jobs` and `max_open_jobs`; `Retry-After` a minute |
+| Open jobs (queued, running, paused), per key | `jobs.max_open_per_key` 20 | `429 jobs_limited` with `open_jobs` and `max_open_jobs`; `Retry-After` a minute. The jobs the key asked for: a fetch carried on as a job (`origin: sync_overflow`) is neither refused nor counted, its fetch's limits hold it |
 | Items of a key's open jobs waiting, the new job's included | `jobs.max_queued_items_per_key`, unset twice `jobs.max_items` and at least 20 000 | `429 jobs_limited` with `queued_items` and `max_queued_items`; a crawl counts its `max_pages` from its acceptance, less the pages it has begun |
 | Requests per minute, all keys | `server.requests_per_minute` 600 | `429 rate_limited`, `limit: server.requests_per_minute` |
 

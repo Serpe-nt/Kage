@@ -162,7 +162,8 @@ pub struct JobCount {
 /// What one key has open ([`JobRepo::open_of_key`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenOfKey {
-    /// Its jobs that are queued, running or paused.
+    /// The jobs it asked for that are queued, running or paused (a fetch
+    /// carried on as a job is not one).
     pub jobs: u64,
     /// The items of those jobs that wait; for a crawl, the pages it may
     /// still ask for: its `max_pages` less the items it has begun, and
@@ -741,12 +742,17 @@ impl JobRepo<'_> {
         Ok(())
     }
 
-    /// What one key has open (the security review's L2): its jobs that are
-    /// queued, running or paused, and the items of those jobs that wait. A
-    /// crawl counts what it may still grow to (its `max_pages`, kept with
-    /// it, less the items it has begun), so that its pages are bounded from
-    /// its acceptance; one whose `max_pages` is not kept yet counts
-    /// `most_pages`.
+    /// What one key has open (the security review's L2): the jobs it asked
+    /// for (`origin` `api`) that are queued, running or paused, and the
+    /// items of those jobs that wait. A crawl counts what it may still grow
+    /// to (its `max_pages`, kept with it, less the items it has begun), so
+    /// that its pages are bounded from its acceptance; one whose `max_pages`
+    /// is not kept yet counts `most_pages`. A fetch carried on as a job
+    /// (`sync_overflow`) is the fetch's, not a job the key made: the bound
+    /// never refuses it, so it does not count toward it either (QA round
+    /// four, api-05); such fetches are bounded by the key's own limits on
+    /// fetches (`max_concurrent`, `requests_per_minute`,
+    /// `daily_page_budget`).
     ///
     /// # Errors
     ///
@@ -769,7 +775,8 @@ impl JobRepo<'_> {
                           count(*) FILTER (WHERE i.state <> 'queued') AS begun
                    FROM job_items i WHERE i.job_id = j.id
                ) AS items
-               WHERE j.api_key_id = $1 AND j.state IN ('queued', 'running', 'paused')"#,
+               WHERE j.api_key_id = $1 AND j.origin = 'api'
+                 AND j.state IN ('queued', 'running', 'paused')"#,
             api_key_id.as_uuid(),
             i64::from(most_pages),
         )

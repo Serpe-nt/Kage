@@ -194,6 +194,23 @@ impl Caller {
     }
 }
 
+/// Logs F211's refusal of a credential that names a caller under the
+/// fields every other line uses for it: `persona` with the persona's id,
+/// `proxy` with a plain client's proxy, `plain` `host` for the host's own
+/// connection. Never the Debug form of an `Option` (`Some(PersonaId(..))`,
+/// `None`), which no search by id finds (QA round four, guard-01); never
+/// the token.
+fn log_credential_refused(claimed: Caller, host: &str, port: u16) {
+    const MESSAGE: &str = "the forwarder refused a credential that names a caller";
+    match claimed {
+        Caller::Persona(persona) => tracing::info!(persona = %persona, host, port, "{MESSAGE}"),
+        Caller::Plain(PlainRoute::Pool(proxy)) => {
+            tracing::info!(proxy = %proxy, host, port, "{MESSAGE}");
+        }
+        Caller::Plain(PlainRoute::Host) => tracing::info!(plain = "host", host, port, "{MESSAGE}"),
+    }
+}
+
 // --- Credentials -----------------------------------------------------------
 
 /// Makes and checks the credential a persona's clients present to the
@@ -1573,12 +1590,7 @@ impl Forwarder {
             .and_then(|(username, _)| Tokens::claimed(&username))
         {
             self.meter.note_credential_refused(claimed, host, port);
-            tracing::info!(
-                persona = ?claimed.persona(),
-                host,
-                port,
-                "the forwarder refused a credential that names a caller"
-            );
+            log_credential_refused(claimed, host, port);
         }
         let _ = client
             .write_all(
@@ -2932,5 +2944,93 @@ mod tests {
         assert_eq!(denials.callers(), 1);
         assert_eq!(denials.since(gone, mark, &hosts), None);
         assert!(denials.since(here, mark, &hosts).is_some());
+    }
+
+    /// The fields of each line a test's subscriber saw, as text.
+    type Seen = Vec<Vec<(String, String)>>;
+
+    /// The lines a test's subscriber saw.
+    #[derive(Clone, Default)]
+    struct Lines(Arc<std::sync::Mutex<Seen>>);
+
+    #[derive(Default)]
+    struct Fields(Vec<(String, String)>);
+
+    impl tracing::field::Visit for Fields {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.push((field.name().to_owned(), value.to_owned()));
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.push((field.name().to_owned(), format!("{value:?}")));
+        }
+    }
+
+    impl tracing::Subscriber for Lines {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut fields = Fields::default();
+            event.record(&mut fields);
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(fields.0);
+        }
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// QA round four, guard-01: F211's line names the persona by its id, as
+    /// every other line does, and a plain client by its proxy or the host;
+    /// it wrote `Some(PersonaId(..))` and `None`.
+    #[test]
+    fn a_refused_credential_is_logged_under_the_callers_own_field() {
+        let lines = Lines::default();
+        let persona = PersonaId::new();
+        let proxy = ProxyId::new();
+        tracing::subscriber::with_default(lines.clone(), || {
+            super::log_credential_refused(Caller::Persona(persona), "qa.kage.test", 8091);
+            super::log_credential_refused(Caller::Plain(PlainRoute::Pool(proxy)), "a.test", 443);
+            super::log_credential_refused(Caller::Plain(PlainRoute::Host), "b.test", 80);
+        });
+        let seen = lines
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let field = |line: usize, name: &str| {
+            seen[line]
+                .iter()
+                .find(|(field, _)| field == name)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(seen.len(), 3, "{seen:?}");
+        assert_eq!(field(0, "persona"), Some(persona.to_string()), "{seen:?}");
+        assert_eq!(
+            field(0, "host").as_deref(),
+            Some("qa.kage.test"),
+            "{seen:?}"
+        );
+        assert_eq!(field(1, "persona"), None, "{seen:?}");
+        assert_eq!(field(1, "proxy"), Some(proxy.to_string()), "{seen:?}");
+        assert_eq!(field(2, "plain").as_deref(), Some("host"), "{seen:?}");
+        for line in &seen {
+            for (_, value) in line {
+                assert!(!value.contains("Some(") && value != "None", "{seen:?}");
+            }
+        }
     }
 }

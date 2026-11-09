@@ -24,7 +24,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub use store::{
-    DOMAINS_FILE, PACING_FILE, PolicyLoadError, PolicySet, PolicyStore, PolicyWatcher,
+    DOMAINS_FILE, PACING_FILE, PolicyLoadError, PolicySet, PolicyStore, PolicyWatcher, ReloadHook,
     SIGNATURES_FILE, WatchError,
 };
 

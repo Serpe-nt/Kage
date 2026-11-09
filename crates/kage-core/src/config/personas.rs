@@ -485,11 +485,20 @@ pub(super) fn validate(
             "personas.warmup.sites must name at most {MAX_WARMUP_SITES} sites"
         ));
     }
-    for site in &warmup.sites {
-        if warmup_url(&site.url, "en").is_none() {
+    for (index, site) in warmup.sites.iter().enumerate() {
+        // The entry is named by its place, never repeated: it may hold a
+        // password (F133, QA round four api-01).
+        let Some(url) = warmup_url(&site.url, "en") else {
             return Err(format!(
-                "personas.warmup.sites: {:?} is not an https URL",
-                site.url
+                "personas.warmup.sites[{index}] is not an https URL with a host"
+            ));
+        };
+        if !url.username().is_empty() || url.password().is_some() {
+            // Every persona would send it to the site, and `config check`
+            // would print it.
+            return Err(format!(
+                "personas.warmup.sites[{index}] must not carry credentials: a warm-up visit is \
+                 a visitor's, who logs in nowhere"
             ));
         }
     }
@@ -612,6 +621,33 @@ mod tests {
         }
     }
 
+    /// QA round four, api-01: a warm-up site is refused when it carries a
+    /// user or a password, and no refusal of a site repeats it: it is named
+    /// by its place, as every other URL key's entry is (F133).
+    #[test]
+    fn a_warmup_site_carries_no_credentials_and_is_never_repeated() {
+        let refused = |url: &str| {
+            let mut personas = PersonasConfig::default();
+            personas.warmup.sites.push(WarmupSite {
+                url: url.to_owned(),
+                countries: Vec::new(),
+            });
+            let index = personas.warmup.sites.len() - 1;
+            let error = validate(&personas, &SessionsConfig::default(), false).unwrap_err();
+            assert!(
+                error.starts_with(&format!("personas.warmup.sites[{index}]")),
+                "{error}"
+            );
+            assert!(!error.contains("s3cret-pw"), "{error}");
+            assert!(!error.contains("warm.invalid"), "{error}");
+            error
+        };
+        assert!(refused("https://qa4:s3cret-pw@warm.invalid/").contains("credentials"));
+        assert!(refused("https://qa4@warm.invalid/").contains("credentials"));
+        assert!(refused("https://:s3cret-pw@warm.invalid/").contains("credentials"));
+        assert!(refused("http://qa4:s3cret-pw@warm.invalid/").contains("https"));
+    }
+
     // One table of every bound, read in one piece.
     #[allow(clippy::too_many_lines)]
     #[test]
@@ -674,15 +710,12 @@ mod tests {
                 let site = p.warmup.sites[0].clone();
                 p.warmup.sites = vec![site; 201];
             }),
-            (
-                "personas.warmup.sites: \"http://plain.example/\"",
-                |p, _| {
-                    p.warmup.sites.push(WarmupSite {
-                        url: "http://plain.example/".to_owned(),
-                        countries: Vec::new(),
-                    });
-                },
-            ),
+            ("personas.warmup.sites[", |p, _| {
+                p.warmup.sites.push(WarmupSite {
+                    url: "http://plain.example/".to_owned(),
+                    countries: Vec::new(),
+                });
+            }),
             ("sessions.idle_ttl", |_, s| {
                 s.idle_ttl = HumanDuration::from_secs(0);
             }),

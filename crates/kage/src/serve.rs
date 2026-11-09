@@ -110,6 +110,9 @@ pub(crate) async fn run(config: Config, bind: Option<SocketAddr>) -> anyhow::Res
     let policies = Arc::new(
         PolicyStore::open(&config.policies.dir, Arc::clone(&alerts))
             .and_then(|store| store.with_cache_bound(config.cache.max_ttl.get()))
+            // A reload's domains are named for the metrics as the start's
+            // are, while room is left (obs-01).
+            .map(|store| store.with_reload_hook(Arc::new(kage_api::metrics::name_reloaded)))
             .context("policies are invalid")?,
     );
     let current = policies.current();

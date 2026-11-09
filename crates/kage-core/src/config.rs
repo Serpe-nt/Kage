@@ -519,6 +519,8 @@ impl Config {
 
         let mut secret_values: Vec<(SecretSpec, Option<String>, Option<PathBuf>)> =
             SECRETS.iter().map(|spec| (*spec, None, None)).collect();
+        // Which variable set which key, so that a refusal can name it.
+        let mut from_env: Vec<(String, String)> = Vec::new();
 
         for (name, value) in env {
             if !name.starts_with(ENV_PREFIX) {
@@ -553,6 +555,7 @@ impl Config {
                     Err(infallible) => match infallible {},
                 }
             };
+            from_env.push((key.clone(), name));
             figment = figment.merge((key, value));
         }
 
@@ -574,6 +577,7 @@ impl Config {
                     if spec.key == "proxies.static_list" {
                         static_list_file = path;
                     }
+                    from_env.push((spec.key.to_owned(), spec.env.to_owned()));
                     figment = figment.merge((spec.key, value));
                 }
                 None if spec.required => missing.push(spec.env),
@@ -584,9 +588,11 @@ impl Config {
             return Err(ConfigError::MissingSecrets(missing));
         }
 
-        let mut config: Self = figment
-            .extract()
-            .map_err(|error| ConfigError::Invalid(crate::yaml::explain(error)))?;
+        let mut config: Self = figment.extract().map_err(|error| {
+            ConfigError::Invalid(crate::yaml::explain_from(error, |path| {
+                value_origin(path, &from_env, file)
+            }))
+        })?;
         config.proxies.static_list_file = static_list_file;
         config.validate()?;
         Ok(config)
@@ -851,6 +857,29 @@ fn defaults() -> Result<serde_json::Value, ConfigError> {
 }
 
 /// `KAGE__SECTION__KEY` to `section.key`.
+/// Where the value at `path` came from, for a refusal's message: the
+/// environment variable that set it or a key above it (the environment
+/// wins over the file), else the configuration file when one was read.
+/// The defaults are never refused, so nothing else is left.
+fn value_origin(
+    path: &[String],
+    from_env: &[(String, String)],
+    file: Option<&Path>,
+) -> Option<String> {
+    let dotted = path.join(".");
+    from_env
+        .iter()
+        .filter(|(key, _)| {
+            dotted == *key
+                || dotted
+                    .strip_prefix(key.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+        .max_by_key(|(key, _)| key.len())
+        .map(|(_, name)| format!("the environment variable {name}"))
+        .or_else(|| file.map(|file| file.display().to_string()))
+}
+
 fn env_key(name: &str) -> Result<String, ConfigError> {
     let invalid = || ConfigError::InvalidEnvKey(name.to_owned());
     let rest = name.strip_prefix(ENV_PREFIX).ok_or_else(invalid)?;
