@@ -785,6 +785,18 @@ version's date is the day, in UTC, its tag was made.
   listener now leaves out what it reads from the database after 2 s and
   serves the rest, and `KageServerLockUnconfirmed` (age above 30 s at a scrape) ships
   in the alert rules.
+- **A redirect's hop names only what it left (review of #95, QA round
+  four sched-01).** A way back taken while a redirect was still under way
+  made the page that came back name the abandoned navigation as its
+  `unanswered_url`; the hop now names its target only for the page it was
+  sent on from, and a `back` abandons it. A page that came back names
+  nothing it was once sent on to (on Chrome, a driver's click waits for
+  its navigation, and the way back named the click's address). A redirect
+  to `file:`, `data:` or `javascript:` is not named (and an unanswered
+  address with no host falls through to the page's own address in Kage,
+  where it made the request's first site be booked); nor is the shown
+  page itself, where the driver reported the new address before its
+  response.
 
 ### Changed
 

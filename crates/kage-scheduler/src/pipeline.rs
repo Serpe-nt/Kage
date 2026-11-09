@@ -790,10 +790,14 @@ fn found_no_answer(output: &AttemptOutput) -> bool {
 }
 
 /// The address the tab of a browser attempt was sent to and that had not
-/// answered when its page was captured.
+/// answered when its page was captured: a web address only. One with no
+/// host (a redirect to `file:`, `data:`, `javascript:`) names no site, and
+/// the page's own address decides (review of #95).
 fn unanswered_at(output: &AttemptOutput) -> Option<Url> {
     let page = output.page.as_ref()?;
-    Url::parse(page.unanswered_url.as_deref()?).ok()
+    Url::parse(page.unanswered_url.as_deref()?)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
 }
 
 /// The address of the `goto` step a flow's attempt ended at, when that

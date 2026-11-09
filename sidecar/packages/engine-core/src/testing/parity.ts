@@ -3231,7 +3231,7 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(answered.final.result.unanswered_url ?? null).toBeNull();
     });
 
-    it('names the last hop of a redirect that never answered, after a goto or a click (QA round four, sched-01)', async () => {
+    it('names the last hop of a redirect that never answered, after a goto (QA round four, sched-01)', async () => {
       const slow = named('/slow?ms=15000');
       const twice = `/guard/redirect?to=${encodeURIComponent(`/guard/redirect?to=${encodeURIComponent('/slow?ms=15000')}`)}`;
       const went = await withContext('flow-redirect-goto', (context) =>
@@ -3248,6 +3248,66 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(went.final.result.final_url).toBe(named('/landing'));
       expect(went.final.result.status).toBe(200);
       expect(went.final.result.unanswered_url).toBe(slow);
+    });
+
+    it('names nothing of a redirect still under way once the persona went back from it (review of #95)', async () => {
+      // The hand's click, whose redirect leads where nothing answers, and
+      // the way back before anything came: the page that comes back names
+      // nothing of the navigation the persona abandoned.
+      const back = await withContext('flow-redirect-back', (context) =>
+        flow(context, {
+          timeout_ms: 40_000,
+          actions: [
+            { action: 'goto', url: named('/') },
+            { action: 'goto', url: named('/onward?via=redirect') },
+            { action: 'click', selector: '#onward', timeout_ms: 3000 },
+            { action: 'back', human: false, timeout_ms: 8000 },
+          ],
+        }),
+      );
+      expect(back.final.result.final_url).not.toBe(named('/slow?ms=15000'));
+      expect(back.final.result.unanswered_url ?? null).toBeNull();
+    });
+
+    it('names nothing a page that came back was once sent on to (review of #95)', async () => {
+      // The driver's click: Chrome's waits until the redirect's last page
+      // committed, Firefox's does not. Either way the way back restores a
+      // page whose departure was answered, and it names nothing.
+      const back = await withContext('flow-redirect-back-committed', (context) =>
+        flow(context, {
+          timeout_ms: 60_000,
+          actions: [
+            { action: 'goto', url: named('/') },
+            { action: 'goto', url: named('/onward?via=redirect') },
+            { action: 'click', selector: '#onward', human: false },
+            { action: 'wait_for', ms: 500 },
+            { action: 'back', human: false, timeout_ms: 8000 },
+          ],
+        }),
+      );
+      expect(back.final.result.unanswered_url ?? null).toBeNull();
+    });
+
+    it('names nothing of a redirect that arrived at a page that answered (review of #95)', async () => {
+      const arrived = await withContext('flow-redirect-arrives', (context) =>
+        flow(context, {
+          timeout_ms: 30_000,
+          actions: [
+            { action: 'goto', url: named('/') },
+            {
+              action: 'goto',
+              url: named(`/guard/redirect?to=${encodeURIComponent('/landing')}`),
+            },
+          ],
+        }),
+      );
+      expect(arrived.final.ok).toBe(true);
+      expect(arrived.final.result.final_url).toBe(named('/landing'));
+      expect(arrived.final.result.unanswered_url ?? null).toBeNull();
+    });
+
+    it('names the last hop of a redirect that never answered, after a click (QA round four, sched-01)', async () => {
+      const slow = named('/slow?ms=15000');
       const clicked = await withContext('flow-redirect-click', (context) =>
         flow(context, {
           timeout_ms: 30_000,

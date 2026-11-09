@@ -1722,6 +1722,79 @@ async fn a_shown_pages_own_server_error_is_its_site_wherever_it_sent_the_tab() {
     world.shut_down().await;
 }
 
+/// The flow of [`redirected_across`] ended on `shown` by `failed`, the
+/// browser naming `unanswered` as where its tab went and found no answer.
+fn redirected_and_failed(failed: AttemptOutput, shown: &str, unanswered: &str) -> AttemptOutput {
+    let mut output = page_with(shown, &serde_json::json!({ "unanswered_url": unanswered }));
+    output.classification = failed.classification;
+    output.courtesy = failed.courtesy;
+    output.reason = failed.reason;
+    output.flow = redirect_to_a_later_site_timed_out().flow;
+    output
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_navigation_to_a_later_site_is_that_sites_as_a_timeout_is() {
+    // The review of #95: a navigation that found no server answering
+    // (`navigation_failed` from the browser, `connection_failed` of a
+    // flow's step) and named where the tab went is that site's, as a
+    // timeout is.
+    for reason in ["navigation_failed", "connection_failed"] {
+        let mut world = World::with(4, false, DEFAULT_DOMAINS, &[]);
+        for _ in 0..3 {
+            world.script.then(redirected_and_failed(
+                AttemptOutput::failed(Outcome::ProviderError, reason, Courtesy::ServerError),
+                "https://shop.example/start",
+                "https://pay.example/checkout",
+            ));
+            let report = world.pipeline.fetch(redirected_across()).await.unwrap();
+            assert_eq!(report.outcome, Outcome::ProviderError, "{reason}");
+        }
+        let paused_at = world.now();
+        for site in ["shop.example", "hop.example"] {
+            let waited = next_page_waited(&mut world, site, paused_at).await;
+            assert!(
+                waited < Span::seconds(30),
+                "{reason}: {site} waited {waited}"
+            );
+        }
+        let waited = next_page_waited(&mut world, "pay.example", paused_at).await;
+        assert!(
+            waited >= Span::seconds(29),
+            "{reason}: the later site waited {waited}"
+        );
+        world.shut_down().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_address_that_names_no_site_leaves_the_page_its_own() {
+    // The review of #95: a redirect to `data:` (or `file:`, `javascript:`)
+    // names no host. The page the flow ended on, on the later site, is
+    // then the one booked, never the request's first site.
+    let mut world = World::with(4, false, DEFAULT_DOMAINS, &[]);
+    for _ in 0..3 {
+        world.script.then(redirected_and_failed(
+            timed_out(),
+            "https://pay.example/checkout",
+            "data:text/html,nothing",
+        ));
+        let report = world.pipeline.fetch(redirected_across()).await.unwrap();
+        assert_eq!(report.outcome, Outcome::Timeout);
+    }
+    let paused_at = world.now();
+    for site in ["shop.example", "hop.example"] {
+        let waited = next_page_waited(&mut world, site, paused_at).await;
+        assert!(waited < Span::seconds(30), "{site} waited {waited}");
+    }
+    let waited = next_page_waited(&mut world, "pay.example", paused_at).await;
+    assert!(
+        waited >= Span::seconds(29),
+        "the shown page's site waited {waited}"
+    );
+    world.shut_down().await;
+}
+
 /// QA round three, flows-01 and lock-01: an attempt whose persona's context
 /// ran another operation in its sidecar for as long as it waited asked the
 /// site nothing. It spends no retry (the request has none here), it is no
