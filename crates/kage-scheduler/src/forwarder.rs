@@ -566,6 +566,10 @@ struct MeterState {
     /// When the forwarder last refused a credential that names each caller
     /// for a connection to each target (F211).
     credential_refused: HashMap<Unrelayed, Instant>,
+    /// When each caller's proxy last answered a tunnel to each target with
+    /// a `5xx`: its exit could not reach the target (QA round four's
+    /// guard-03).
+    unreached: HashMap<Unrelayed, Instant>,
 }
 
 /// The tunnels of one caller to one target ([`Meter::open_tunnel`]).
@@ -696,8 +700,8 @@ impl Meter {
     /// page of that target that fails meanwhile without an answer failed
     /// at the proxy, not at the site (F108). A proxy that answered a
     /// tunnel with a refusal of the target (`note_refused`) or a `5xx`
-    /// for a target it could not reach, and a client that went away, are
-    /// not the proxy's failure.
+    /// for a target it could not reach (`note_unreached`), and a client
+    /// that went away, are not the proxy's failure.
     pub fn note_unrelayed(&self, caller: Caller, host: &str, port: u16) {
         let now = Instant::now();
         let mut state = self.state();
@@ -723,6 +727,41 @@ impl Meter {
         state
             .refused
             .insert((caller, host.to_ascii_lowercase(), port), (now, status));
+    }
+
+    /// Notes that a caller's proxy answered its tunnel to `host`:`port`
+    /// with a `5xx` (a `502`, `503`, `504`): the exit could not reach the
+    /// target, or the proxy is overloaded now. That is the target's failed
+    /// connection and never the proxy's (spec §8.3, F108): a page of that
+    /// target that fails meanwhile without an answer failed at the site
+    /// (QA round four's guard-03).
+    pub fn note_unreached(&self, caller: Caller, host: &str, port: u16) {
+        let now = Instant::now();
+        let mut state = self.state();
+        state
+            .unreached
+            .retain(|_, at| now.duration_since(*at) < UNRELAYED_KEPT);
+        state
+            .unreached
+            .insert((caller, host.to_ascii_lowercase(), port), now);
+    }
+
+    /// Whether the proxy of `caller` answered a tunnel to one of
+    /// `targets` (host and port) with a `5xx` at `since` or later
+    /// ([`Meter::note_unreached`]).
+    pub fn unreached_since<'a>(
+        &self,
+        caller: Caller,
+        targets: impl IntoIterator<Item = (&'a str, u16)>,
+        since: Instant,
+    ) -> bool {
+        let state = self.state();
+        targets.into_iter().any(|(host, port)| {
+            state
+                .unreached
+                .get(&(caller, host.to_ascii_lowercase(), port))
+                .is_some_and(|at| *at >= since)
+        })
     }
 
     /// Notes that the forwarder refused a credential that names `caller`
@@ -1179,10 +1218,15 @@ enum Refused {
     /// The persona's proxy could not be reached, did not answer, or
     /// refused the provider's credential: the proxy's own failure.
     Upstream(String),
-    /// The target could not be reached (a proxy's `5xx` to the tunnel, no
-    /// address that answered), or the client went away: not the proxy's
-    /// own failure.
+    /// The target could not be reached (no address that answered), or the
+    /// client went away: not the proxy's own failure.
     Unreached(String),
+    /// The proxy answered the tunnel with this status, neither a success
+    /// nor a `4xx` (a `502`, `503` or `504`): its exit could not reach
+    /// the target, or it is overloaded now. The target's failed
+    /// connection, never the proxy's (spec §8.3, F108; QA round four's
+    /// guard-03).
+    TargetUnreached(u16),
     /// The proxy answered the tunnel with this `4xx`, not a `407`: the
     /// provider will not carry the target (its blocklist, its policy).
     /// Not the proxy's own failure, and not the site's answer (F189).
@@ -1645,8 +1689,9 @@ impl Forwarder {
     }
 
     /// Notes how a tunnel through a proxy ended, for the executor: the
-    /// proxy's failure (F108), or its refusal of the target (F189), which
-    /// is logged so that an operator sees a provider's blocklist at work.
+    /// proxy's failure (F108), its refusal of the target (F189), which is
+    /// logged so that an operator sees a provider's blocklist at work, or
+    /// a target its exit could not reach (guard-03), logged the same way.
     fn note_tunnel(
         &self,
         tunnelled: &Result<(), Refused>,
@@ -1664,6 +1709,16 @@ impl Forwarder {
                     port,
                     status,
                     "the proxy refused a tunnel to the target"
+                );
+            }
+            Err(Refused::TargetUnreached(status)) => {
+                self.meter.note_unreached(caller, host, port);
+                tracing::info!(
+                    proxy = %proxy,
+                    host = %host,
+                    port,
+                    status,
+                    "the proxy could not reach the target of a tunnel"
                 );
             }
             _ => {}
@@ -2048,14 +2103,12 @@ impl Forwarder {
 /// (its blocklist, its policy), alike for every proxy of it: neither the
 /// proxy's failure nor the site's answer (F189). Any other (a `502`, `503`
 /// or `504`: a target the exit could not reach, a proxy overloaded now) is
-/// the target's failed connection, not the proxy's (F108).
+/// the target's failed connection, not the proxy's (F108, guard-03).
 fn tunnel_refusal(status: u16) -> Option<Refused> {
     match status {
         200..=299 => None,
         400..=499 => Some(Refused::Tunnel(status)),
-        _ => Some(Refused::Unreached(format!(
-            "the proxy answered the tunnel with {status}"
-        ))),
+        _ => Some(Refused::TargetUnreached(status)),
     }
 }
 
@@ -2718,6 +2771,40 @@ mod tests {
         drop(held);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn the_meter_says_whose_tunnel_the_proxy_could_not_take_to_its_target() {
+        let meter = Meter::default();
+        let (one, other) = (PersonaId::new(), PersonaId::new());
+        let before = tokio::time::Instant::now();
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        let site = [("shop.kage.test", 443)];
+        assert!(!meter.unreached_since(Caller::Persona(one), site, before));
+
+        meter.note_unreached(Caller::Persona(one), "Shop.Kage.Test", 443);
+        assert!(meter.unreached_since(Caller::Persona(one), site, before));
+        // A target the exit could not reach is neither the proxy's failure
+        // nor its refusal (F108, guard-03).
+        assert!(!meter.unrelayed_since(Caller::Persona(one), site, before));
+        assert_eq!(
+            meter.refused_since(Caller::Persona(one), site, before),
+            None
+        );
+        // One of the attempt's targets is enough; another caller's, or
+        // another port, is not this one.
+        let chain = [("cdn.kage.test", 443), ("shop.kage.test", 443)];
+        assert!(meter.unreached_since(Caller::Persona(one), chain, before));
+        assert!(!meter.unreached_since(Caller::Persona(other), site, before));
+        assert!(!meter.unreached_since(Caller::Persona(one), [("shop.kage.test", 80)], before));
+        // An attempt that began after it saw nothing of it.
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        let later = tokio::time::Instant::now();
+        assert!(!meter.unreached_since(Caller::Persona(one), site, later));
+        // What is older than any attempt is forgotten at the next note.
+        tokio::time::advance(super::UNRELAYED_KEPT).await;
+        meter.note_unreached(Caller::Persona(other), "other.kage.test", 443);
+        assert_eq!(meter.state().unreached.len(), 1);
+    }
+
     #[test]
     fn only_a_4xx_to_a_tunnel_is_the_providers_refusal_of_the_target() {
         assert_eq!(super::tunnel_refusal(200), None);
@@ -2728,8 +2815,9 @@ mod tests {
         // A target the exit could not reach, a proxy overloaded now: the
         // target's failed connection (F108), never a refusal.
         for status in [301, 500, 502, 503, 504] {
-            assert!(
-                matches!(super::tunnel_refusal(status), Some(Refused::Unreached(_))),
+            assert_eq!(
+                super::tunnel_refusal(status),
+                Some(Refused::TargetUnreached(status)),
                 "{status}"
             );
         }

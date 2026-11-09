@@ -540,6 +540,15 @@ version's date is the day, in UTC, its tag was made.
   being asked. The sidecar now names the address the tab was sent to
   that had not answered (`unanswered_url` of a page result, sidecar
   contract 1.9.0), and its timeout is that site's.
+- **A proxy's `5xx` to a tunnel is the target's failed connection (QA
+  round four, guard-03).** The forwarder knew a `502`, `503` or `504` to a
+  `CONNECT` meant the exit could not reach the target, but noted it
+  nowhere the executor reads, so the client's own failed tunnel stood as
+  `proxy_failed` at every level: the proxy was blamed, the pool told, and
+  the page tried on other personas as a failed proxy. It is noted now, and
+  such an attempt is `connection_failed` (`navigation_failed` for a
+  browser's page) with a server error's courtesy, as spec §8.3 says; the
+  forwarder logs it at `info` with the proxy and the target.
 
 ### Changed
 
