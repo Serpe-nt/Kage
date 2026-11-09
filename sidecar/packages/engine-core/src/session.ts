@@ -1589,7 +1589,15 @@ export class PageSession {
     }
     // Only a web page counts as a document that came back: the browser's
     // own pages (a blank one, an error) are nothing a capture describes.
-    this.document = memory.get(from) ?? newDocument(/^https?:\/\//i.test(from) ? from : null);
+    const adopted = memory.get(from) ?? newDocument(/^https?:\/\//i.test(from) ? from : null);
+    if (state.response !== null && redirectTarget(state.response) !== null) {
+      // The state left was a redirect's hop, never a document the tab
+      // showed: the tab still shows the page before it, and was sent on
+      // from there to where the last hop pointed. That address, not the
+      // first hop's, is where no answer came (QA round four, sched-01).
+      adopted.sentTo = state.sentTo ?? adopted.sentTo;
+    }
+    this.document = adopted;
   }
 
   /**

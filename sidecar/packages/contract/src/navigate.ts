@@ -740,7 +740,7 @@ export const PageResultSchema = z
       .nullable()
       .optional()
       .describe(
-        "The address the tab was sent to after the document it shows (a click, a key, a script, a `back`) when no answer to it had come by the capture: the navigation under way that the capture's error or the step's time ran out on. Null when every navigation of the tab was answered, and when `final_url` already names it (the browser's own error page). Absent from a sidecar of before 1.9.0. Since 1.9.0 (QA round three, flows-04).",
+        "The address the tab was sent to after the document it shows (a click, a key, a script, a `back`) when no answer to it had come by the capture: the navigation under way that the capture's error or the step's time ran out on. Behind a redirect, after a `goto` or a click, the last hop that never answered (QA round four, sched-01). Null when every navigation of the tab was answered, and when `final_url` already names it (the browser's own error page). Absent from a sidecar of before 1.9.0. Since 1.9.0 (QA round three, flows-04).",
       ),
   })
   .meta({ id: 'PageResult', description: 'What one page load produced.' });

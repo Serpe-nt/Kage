@@ -3028,6 +3028,53 @@ export function defineParitySuite(subject: ParitySubject): void {
       expect(answered.final.result.unanswered_url ?? null).toBeNull();
     });
 
+    it('names the last hop of a redirect that never answered, after a goto or a click (QA round four, sched-01)', async () => {
+      const slow = named('/slow?ms=15000');
+      const twice = `/guard/redirect?to=${encodeURIComponent(`/guard/redirect?to=${encodeURIComponent('/slow?ms=15000')}`)}`;
+      const went = await withContext('flow-redirect-goto', (context) =>
+        flow(context, {
+          timeout_ms: 30_000,
+          actions: [
+            { action: 'goto', url: named('/landing') },
+            { action: 'goto', url: named(twice), timeout_ms: 3000 },
+          ],
+        }),
+      );
+      // The tab still shows the page before; the address that never
+      // answered is the redirect's last hop, not the goto's own.
+      expect(went.final.result.final_url).toBe(named('/landing'));
+      expect(went.final.result.status).toBe(200);
+      expect(went.final.result.unanswered_url).toBe(slow);
+      const clicked = await withContext('flow-redirect-click', (context) =>
+        flow(context, {
+          timeout_ms: 30_000,
+          actions: [
+            { action: 'goto', url: named('/onward?via=redirect') },
+            { action: 'click', selector: '#onward', timeout_ms: 3000 },
+          ],
+        }),
+      );
+      expect(clicked.final.result.final_url).toBe(named('/onward?via=redirect'));
+      expect(clicked.final.result.unanswered_url).toBe(slow);
+    });
+
+    it('names where a page that answered with a server error sent the tab, and keeps its own status (sched-01)', async () => {
+      const run = await withContext('flow-erred-onward', (context) =>
+        flow(context, {
+          timeout_ms: 30_000,
+          actions: [
+            { action: 'goto', url: named('/onward?status=503') },
+            { action: 'click', selector: '#onward', timeout_ms: 3000 },
+          ],
+        }),
+      );
+      // The page shown is the 503's, of its own site; where it sent the
+      // tab is named apart, for Kage to tell the two failures apart.
+      expect(run.final.result.final_url).toBe(named('/onward?status=503'));
+      expect(run.final.result.status).toBe(503);
+      expect(run.final.result.unanswered_url).toBe(named('/slow?ms=15000'));
+    });
+
     it('runs the other steps of a flow, by the driver when told, and stops at the first failure', async () => {
       const run = await withContext('flow-rest', (context) =>
         flow(context, {

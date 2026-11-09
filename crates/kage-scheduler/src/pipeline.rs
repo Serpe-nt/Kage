@@ -743,7 +743,12 @@ pub fn attempt_seed(persona: &Seed, request: RequestId, n: u32) -> Seed {
 /// the tab was sent to (a click, a key, a script) that never answered
 /// while it still showed the page before it: the browser names it
 /// (`unanswered_url`), and what came of it is that site's, not the shown
-/// page's (QA round three, flows-04). `None` for an attempt that ended on its own
+/// page's (QA round three, flows-04). Behind a redirect it names the last
+/// hop, the address that never answered, and never the site that only
+/// redirected, whether a `goto` or a click went there (QA round four,
+/// sched-01). Only a navigation that found no answer is that address's:
+/// a shown page that answered with a server error itself is its own
+/// site's, wherever it sent the tab after. `None` for an attempt that ended on its own
 /// domain, and for one that brought no site's page back otherwise (a
 /// refused hop, a failed connection, the proxy). The host is in its
 /// normal form (F104), as the request's domain and the flow's later sites
@@ -752,7 +757,7 @@ fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
     if output.outcome() == Outcome::SsrfDenied {
         return None;
     }
-    let unanswered = (output.courtesy == Courtesy::ServerError)
+    let unanswered = (output.courtesy == Courtesy::ServerError && found_no_answer(output))
         .then(|| unanswered_at(output))
         .flatten();
     let ended = if let Some(unanswered) = unanswered {
@@ -769,6 +774,17 @@ fn shown_by(course: &Course, output: &AttemptOutput) -> Option<String> {
         .host_str()?
         .to_ascii_lowercase();
     (host != course.domain).then_some(host)
+}
+
+/// Whether an attempt ended on a navigation that found no answer: its time
+/// ran out, or no server answered (a refused or broken connection). An
+/// attempt that ended on the shown page's own answer (a 5xx) did not.
+fn found_no_answer(output: &AttemptOutput) -> bool {
+    output.outcome() == Outcome::Timeout
+        || matches!(
+            output.reason.as_deref(),
+            Some("navigation_failed" | "connection_failed")
+        )
 }
 
 /// The address the tab of a browser attempt was sent to and that had not
