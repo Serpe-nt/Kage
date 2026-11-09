@@ -2284,14 +2284,14 @@ Where each finding went:
 - pool0-01, pool0-05 (high): [Serpe-nt/Kage#91](https://github.com/Serpe-nt/Kage/pull/91).
 - pool0-04 (high): [Serpe-nt/Kage#93](https://github.com/Serpe-nt/Kage/pull/93).
 - pool0-02, pool0-03: [Serpe-nt/Kage#99](https://github.com/Serpe-nt/Kage/pull/99).
-- api-01 to api-07, guard-01, guard-04, obs-01, sched-02: [Serpe-nt/Kage#97](https://github.com/Serpe-nt/Kage/pull/97)
-  (open).
+- api-01 to api-07, guard-01, guard-04, obs-01, sched-02: [Serpe-nt/Kage#97](https://github.com/Serpe-nt/Kage/pull/97).
 - input-01 (high): [Serpe-nt/Kage#96](https://github.com/Serpe-nt/Kage/pull/96).
 - flow-01 (high): its own session (F238).
-- typing-01 (high by the rule): not reproduced on 9cb301b (#96 most likely
-  fixed it in passing); a Chromium regression test is due (F239).
+- typing-01 (high by the rule): [Serpe-nt/Kage#105](https://github.com/Serpe-nt/Kage/pull/105) (F239).
 - sched-03, lock-05, guard-02, typing-02, typing-03, typing-04: F240 to
   F245.
+- b85-01, b85-02: [Serpe-nt/Kage#106](https://github.com/Serpe-nt/Kage/pull/106) (open, on hold: its review found the flow
+  `goto`'s `final_url` overwritten on the roads without a redirect).
 - After #85 merged, a short pass over its areas (`docs/qa/2026-11-09-browsers-85.md`,
   [Serpe-nt/Kage#104](https://github.com/Serpe-nt/Kage/pull/104)): round three's nine repros hold;
   b85-01 and b85-02 are F256 and F257.
@@ -2318,9 +2318,17 @@ Round four's fixes and their reviews found these:
   F103's 10 s read limit and marks the renderer stuck. A read that waits on
   a pending navigation is no stuck renderer; the step after it reports the
   unanswered navigation.
-- **F239 (high by the rule):** browser-07's Chrome half came back on 98506e9
-  (lent keys named `"\u0000"`) and is gone on 9cb301b (typing-01); find
-  what #96 changed and hold it with a Chromium test that fails on 98506e9.
+- **F239 (high by the rule, fixed by [Serpe-nt/Kage#105](https://github.com/Serpe-nt/Kage/pull/105)):** browser-07's Chrome half
+  came back (typing-01): Chrome reads the display's key map at its first key
+  and when the display announces a new keyboard, so a key lent after the
+  first key was named `"\u0000"`; it depended on what the persona typed
+  before. The input now announces a new keyboard after each remap. #105's
+  review, left for later: the spec and the Chromium runbook still say a
+  character past the twelve spare keys is `"\u0000"` (unmeasured since the
+  announcement); send only the narrower `XkbSetMap` (the "restore" is a
+  no-op that could widen a range read once at open); cache only a lasting
+  "no XKB" as permanent; compare the parity case per letter; say that
+  giving keys back announces too.
 - **F240 (medium):** under `domain_concurrency: 1` one page whose retry
   waits for the visit to end holds the whole batch `paused` `no_persona`
   for `scheduler.visit_idle` while the site's visitor is free (sched-03).
@@ -2384,6 +2392,22 @@ Round four's fixes and their reviews found these:
   left-over time (`Timeout 37ms exceeded`), not the step's budget; rethrow
   it as the step's own `did not finish within <timeout> ms` (#96's
   follow-up check).
+- **F258 (low):** #98's last check: the stop's 20 s bound has no margin (10 +
+  5 + 3 + 2 s), and the "taken" road returns from `main`, where dropping the
+  runtime waits for blocking threads with no bound; the 503 covers less than
+  everything before the site is asked (a session lookup, the carried count,
+  a job's idempotency lookup still answer 500, which is safe); the lock code
+  reads the pool's options, which the fence redirects (nothing calls it
+  after a fence today).
+- **F259 (low):** `a_key_may_have_so_many_fetches_carried_on_as_jobs_open`
+  (#97) fills the cache with a fetch under a 300 ms `sync_wall_time`; on a
+  loaded runner that fetch is carried on (`202`, not `200`) and the test
+  fails (seen once in #98's CI).
+- **F260 (low):** #106's review beyond its blocking point: the click road to
+  Chrome's unkept `304` is still `timeout` (straight) or reason `download`
+  (behind a redirect); §10.5 should say what the steps after a page-less
+  `goto` act on (Chrome stays on the page before, Camoufox shows the
+  `304`'s empty page).
 - **F256 (high by the round's rule, harm low):** class-02's fix (#85) reaches
   only a typed address: in Chromium a `304` to an address nothing was kept
   for, behind a `302` or as a flow's `goto`, is `provider_error aborted`
