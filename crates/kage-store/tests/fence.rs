@@ -256,3 +256,86 @@ async fn another_servers_lock_is_left_alone() {
     assert!(other.held().await.unwrap());
     assert_eq!(holder(&db.url).await, Some(other.pid()));
 }
+
+/// Review of #98: an advisory lock is a database's. Two servers on two
+/// databases of one Postgres each hold their own lock, and a server that
+/// takes its own back never takes the other database's for another
+/// server of its own (it stopped as "another kage server is running").
+#[tokio::test]
+async fn a_server_of_another_database_on_the_same_postgres_is_not_this_ones() {
+    let db = TestDb::migrated().await;
+    sqlx::query("CREATE DATABASE second")
+        .execute(db.store.pool())
+        .await
+        .unwrap();
+    let (server, _) = db.url.rsplit_once('/').unwrap();
+    let second_url = format!("{server}/second");
+    let here = server_store(&db.url, 2).await;
+    let there = server_store(&second_url, 2).await;
+    let mut theirs = ServerLock::take(there.pool()).await.unwrap().unwrap();
+    // Each database has its own lock.
+    let mine = ServerLock::take(here.pool()).await.unwrap().unwrap();
+    let stale = mine.pid();
+    mine.release().await.unwrap();
+
+    let mut back = ServerLock::take_back(here.pool(), stale)
+        .await
+        .unwrap()
+        .expect("the other database's lock is not this one's");
+    assert!(back.held().await.unwrap());
+    assert!(theirs.held().await.unwrap());
+}
+
+/// Review of #98: a session of this process's that holds the lock under
+/// another backend number than the one it last knew (one an earlier take
+/// left behind when the network was cut) is still this process's: its
+/// name says so.
+#[tokio::test]
+async fn a_session_of_ours_under_another_backend_is_taken_back() {
+    let db = TestDb::migrated().await;
+    let store = server_store(&db.url, 2).await;
+    let mut left = ServerLock::take(store.pool()).await.unwrap().unwrap();
+    let left_pid = left.pid();
+    let mut back = ServerLock::take_back(store.pool(), left_pid + 100_000)
+        .await
+        .unwrap()
+        .expect("a session of ours, whatever its backend");
+    assert_ne!(back.pid(), left_pid);
+    assert!(back.held().await.unwrap());
+    assert!(left.held().await.is_err());
+}
+
+/// Review of #98: the fence stops new statements, not a transaction that
+/// was under way on a connection in use. Ending the server's own sessions
+/// rolls it back: nothing of it commits after the decision.
+#[tokio::test]
+async fn a_transaction_under_way_when_the_fence_came_is_rolled_back() {
+    let db = TestDb::migrated().await;
+    sqlx::query("CREATE TABLE under_way (n int)")
+        .execute(db.store.pool())
+        .await
+        .unwrap();
+    let store = server_store(&db.url, 2).await;
+    let mut transaction = store.pool().begin().await.unwrap();
+    sqlx::query("INSERT INTO under_way VALUES (1)")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    store.fence();
+    // The fence alone leaves it be: the connection was in use.
+    sqlx::query("INSERT INTO under_way VALUES (2)")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    let ended = store
+        .end_own_sessions(Duration::from_secs(3))
+        .await
+        .unwrap();
+    assert!(ended >= 1, "{ended}");
+    assert!(transaction.commit().await.is_err());
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM under_way")
+        .fetch_one(db.store.pool())
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}

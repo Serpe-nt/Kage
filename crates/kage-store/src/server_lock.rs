@@ -33,11 +33,14 @@ pub const SERVER_LOCK: i64 = 0x6b61_6765_7365_7276;
 pub const KEEPALIVES: &str = "SET tcp_keepalives_idle = 30; \
      SET tcp_keepalives_interval = 10; SET tcp_keepalives_count = 3";
 
-/// The session that holds [`SERVER_LOCK`], when one does, and its
-/// `application_name`.
+/// The session that holds [`SERVER_LOCK`] on this database, when one does,
+/// and its `application_name`. An advisory lock is a database's: a server
+/// of another database on the same Postgres holds a lock of the same key
+/// that is not this one (review of #98).
 const HOLDER: &str = "SELECT l.pid, a.application_name FROM pg_locks l \
      LEFT JOIN pg_stat_activity a USING (pid) WHERE l.locktype = 'advisory' AND l.granted \
-     AND l.objsubid = 1 AND ((l.classid::bigint << 32) | l.objid::bigint) = $1";
+     AND l.objsubid = 1 AND ((l.classid::bigint << 32) | l.objid::bigint) = $1 \
+     AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())";
 
 /// How often [`ServerLock::take_back`] asks for the lock while the session
 /// it ended lets it go.
@@ -86,10 +89,12 @@ impl ServerLock {
     /// lock is ended first: its connection waits behind what the network
     /// held up and answers nothing in time, though the database is
     /// reachable again (QA round four lock-04). A session is ours when it
-    /// has the backend `ours` and the pool's own `application_name`
-    /// (`kage <id>`, of this process alone), so that a backend number that
-    /// Postgres gave to another server's session since is never ended.
-    /// `None` when another session holds the lock: another server took it.
+    /// carries the pool's own `application_name` (`kage <id>`, of this
+    /// process alone), whatever its backend: a session an earlier take of
+    /// this process left behind holds the lock under another number. Only
+    /// a pool whose sessions carry no name of their own (a test's) goes by
+    /// the backend `ours`. `None` when another session holds the lock:
+    /// another server took it.
     ///
     /// # Errors
     ///
@@ -99,26 +104,28 @@ impl ServerLock {
         let name = options.get_application_name().map(str::to_owned);
         let mut connection = PgConnection::connect_with(&options).await?;
         connection.execute(KEEPALIVES).await?;
-        let mut ended = false;
+        let mut ended = None;
         for _ in 0..TAKE_BACK_TRIES {
             let holder: Option<(i32, Option<String>)> = sqlx::query_as(HOLDER)
                 .bind(SERVER_LOCK)
                 .fetch_optional(&mut connection)
                 .await?;
-            let theirs = |(pid, holder_name): &(i32, Option<String>)| {
-                *pid != ours || (name.is_some() && *holder_name != name)
+            let mine = |(pid, holder_name): &(i32, Option<String>)| match &name {
+                Some(name) => holder_name.as_deref() == Some(name.as_str()),
+                None => *pid == ours,
             };
             match holder {
-                Some(holder) if theirs(&holder) => {
+                Some(holder) if !mine(&holder) => {
                     connection.close().await?;
                     return Ok(None);
                 }
-                Some(_) if !ended => {
-                    // Ended by its pid: it is this server's own session.
-                    ended = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
-                        .bind(ours)
+                Some((pid, _)) if ended != Some(pid) => {
+                    // This server's own session: ended by its backend.
+                    let _: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+                        .bind(pid)
                         .fetch_one(&mut connection)
                         .await?;
+                    ended = Some(pid);
                 }
                 Some(_) => {}
                 None => {

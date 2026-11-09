@@ -741,7 +741,8 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         let unconfirmed = unconfirmed.is_some();
-        telemetry.shut_down_within(unconfirmed).await;
+        let for_the_lock = served.as_ref().is_err_and(serve::stopped_for_the_lock);
+        telemetry.shut_down_within(for_the_lock).await;
         if unconfirmed {
             std::process::exit(i32::from(serve::EXIT_LOCK_UNCONFIRMED));
         }

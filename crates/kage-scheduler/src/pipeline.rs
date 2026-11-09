@@ -117,7 +117,8 @@ use crate::archive::{Archive, Archived, Keep};
 use crate::backend::Backend;
 use crate::executor::{
     Arrival, AttemptExecutor, AttemptJob, AttemptOutput, BehaviorWish, CONTEXT_BUSY,
-    CONTEXT_CONFLICT, FlowPlan, PlainJob, SiteExits, default_capture, default_wait,
+    CONTEXT_CONFLICT, FlowPlan, PlainJob, STORE_UNAVAILABLE, SiteExits, default_capture,
+    default_wait,
 };
 use crate::forwarder::PlainRoute;
 use crate::metrics;
@@ -583,6 +584,7 @@ fn unmade_by(reason: Option<&str>) -> Option<Unmade> {
     match reason {
         Some(CONTEXT_BUSY) => Some(Unmade::Busy),
         Some(CONTEXT_CONFLICT) => Some(Unmade::Conflict),
+        Some(STORE_UNAVAILABLE) => Some(Unmade::Store),
         _ => None,
     }
 }

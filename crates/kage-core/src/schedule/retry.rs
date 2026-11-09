@@ -117,6 +117,10 @@ pub enum Unmade {
     /// before this one (`context_conflict`): asking again is answered the
     /// same at once, so the next attempt goes to another persona.
     Conflict,
+    /// The database could not be reached to read what the attempt needed
+    /// before it asked the site (the persona's cookies): the next attempt
+    /// asks it again (review of #98).
+    Store,
 }
 
 /// How far a request has come.

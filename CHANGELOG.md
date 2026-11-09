@@ -748,13 +748,20 @@ version's date is the day, in UTC, its tag was made.
   the lock and started the same items again, or without any stop at all.
   The stopping server went on for 8 to 60 s: it claimed jobs, renewed
   leases, and wrote personas and sessions after the other server held the
-  lock. Now a page whose outcome cannot be written for the database waits
-  (`store`), for its worker or whoever claims the job next. The moment a
-  server decides to stop for its lock it fences its store: the pool is
-  closed, and no claim, lease, item, job, persona or session write leaves
-  it from then on; it exits within 20 s. Its exit message says when it
-  stopped writing, not that it stopped before another server could take
-  the lock.
+  lock. Now a page whose outcome cannot be written because the database
+  cannot be reached waits (`store`), for its worker or whoever claims the
+  job next; a statement the database refuses for what it is still fails
+  the item. The moment a server decides to stop for its lock it fences its
+  store: the pool is closed, and no new claim, lease, item, job, persona
+  or session write leaves it from then on. What was already under way on
+  a connection is rolled back as the server ends its own sessions, at once
+  when another server took the lock, else as soon as the database
+  answers; every session of the server keeps short TCP keepalives, so
+  Postgres ends what is left no later than it lets the lock go. The server
+  exits within 20 s. Its exit message says when it stopped writing, and
+  whether its sessions were ended, not that it stopped before another
+  server could take the lock. A cookie jar that cannot be read on a cut is
+  an attempt never made, not the page's failure.
 - **A stopped server's own session no longer refuses the next one (QA
   round four lock-02).** After a stop for the lock whose cut then healed,
   the restarted server was refused five or six times, for 10 to 16 s, as
@@ -775,7 +782,7 @@ version's date is the day, in UTC, its tag was made.
   at an age above 60 s, which could never fire: the server stops at 45 to
   50 s, and no scrape carried the series during a cut. The metrics
   listener now leaves out what it reads from the database after 2 s and
-  serves the rest, and `KageServerLockUnconfirmed` (age above 35 s) ships
+  serves the rest, and `KageServerLockUnconfirmed` (age above 30 s at a scrape) ships
   in the alert rules.
 
 ### Changed

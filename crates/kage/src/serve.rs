@@ -241,25 +241,21 @@ async fn ended(store: &Store, served: anyhow::Result<Option<LockLoss>>) -> anyho
     // connection of its own when the database can be reached, so that the
     // lock is free at once and nothing of this server's runs after it
     // (QA round four lock-02).
-    let sessions = match store.end_own_sessions(OWN_SESSIONS_WITHIN).await {
-        Ok(ended) => {
-            tracing::info!(
-                sessions = ended,
-                "this server's sessions in the database were ended"
-            );
-            OwnSessions::Ended
-        }
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "this server's sessions in the database could not be ended: Postgres ends \
-                 them, and lets the lock go, about a minute after they last answered"
-            );
-            OwnSessions::Unreachable
-        }
-    };
+    let ending = store.end_own_sessions(OWN_SESSIONS_WITHIN).await;
+    match &ending {
+        Ok(ended) => tracing::info!(
+            sessions = ended,
+            "this server's sessions in the database were ended"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            "this server's sessions in the database could not be ended: Postgres ends them, \
+             and lets the lock go, about a minute after they last answered"
+        ),
+    }
+    let sessions = OwnSessions::of(&ending);
     match lost {
-        LockLoss::Taken => anyhow::bail!(ANOTHER_SERVER),
+        LockLoss::Taken => Err(LockTaken { sessions }.into()),
         LockLoss::Unconfirmed { after } => Err(LockUnconfirmed { after, sessions }.into()),
     }
 }
@@ -304,6 +300,36 @@ impl HeldLock for StoreLock {
 
     fn fence(&self) {
         self.store.fence();
+        // A transaction already under way on a connection in use when the
+        // fence came would still commit: the server ends its own sessions,
+        // which rolls it back, as soon as the database answers: at once
+        // when another server took the lock (review of #98).
+        tokio::spawn(end_own_sessions_soon(self.store.clone()));
+    }
+}
+
+/// Ends the sessions of a fenced store in the database, looking again
+/// every second while the database cannot be reached, until it could or
+/// the process ends.
+async fn end_own_sessions_soon(store: Store) {
+    loop {
+        match store.end_own_sessions(OWN_SESSIONS_WITHIN).await {
+            Ok(ended) => {
+                tracing::info!(
+                    sessions = ended,
+                    "this server's sessions in the database were ended: nothing it had under \
+                     way there runs on"
+                );
+                return;
+            }
+            Err(error) if error.is_connection() => {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "this server's sessions in the database cannot be ended");
+                return;
+            }
+        }
     }
 }
 
@@ -331,10 +357,68 @@ pub(crate) const EXIT_LOCK_UNCONFIRMED: u8 = 75;
 /// What became of a stopped server's own sessions in the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OwnSessions {
-    /// They were ended on the way out: the lock is free.
+    /// They were ended on the way out: the server holds the lock no more.
     Ended,
     /// The database could not be reached on the way out.
     Unreachable,
+    /// The database answered and refused to end them (a role without the
+    /// right to end its own sessions).
+    Refused,
+}
+
+impl OwnSessions {
+    /// What the result of ending them comes to.
+    fn of(ended: &Result<u64, kage_store::StoreError>) -> Self {
+        match ended {
+            Ok(_) => Self::Ended,
+            Err(error) if error.is_connection() => Self::Unreachable,
+            Err(_) => Self::Refused,
+        }
+    }
+
+    /// What an exit message says of them.
+    const fn said(self) -> &'static str {
+        match self {
+            Self::Ended => {
+                "Its sessions in the database were ended on the way out: it holds the lock no more"
+            }
+            Self::Unreachable => {
+                "The database could not be reached on the way out: until Postgres lets the lock \
+                 go, a server started is refused as if another one ran"
+            }
+            Self::Refused => {
+                "The database refused to end its sessions on the way out (see the log): until \
+                 Postgres lets the lock go, a server started is refused as if another one ran"
+            }
+        }
+    }
+}
+
+/// What a server that found another one holding its database's lock says
+/// as it exits (F174): it stopped writing when it found out.
+#[derive(Debug)]
+pub(crate) struct LockTaken {
+    /// What became of its sessions.
+    pub(crate) sessions: OwnSessions,
+}
+
+impl std::fmt::Display for LockTaken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{ANOTHER_SERVER}. This server stopped writing to the database when it found the \
+             lock taken. {}",
+            self.sessions.said()
+        )
+    }
+}
+
+impl std::error::Error for LockTaken {}
+
+/// Whether `serve` ended because the server stopped for its database's
+/// lock, either way: such a stop exits within its bound (spec §16.6).
+pub(crate) fn stopped_for_the_lock(error: &anyhow::Error) -> bool {
+    error.is::<LockUnconfirmed>() || error.is::<LockTaken>()
 }
 
 /// What a server that could not confirm its lock says as it exits.
@@ -363,15 +447,7 @@ impl std::fmt::Display for LockUnconfirmed {
              lock go (about a minute after the lock's session last answered), and the jobs it \
              held are claimed again once their leases run out (ADR 0005). ",
         )?;
-        match self.sessions {
-            OwnSessions::Ended => f.write_str(
-                "Its sessions in the database were ended on the way out: the lock is free now",
-            )?,
-            OwnSessions::Unreachable => f.write_str(
-                "The database could not be reached on the way out: until Postgres lets the \
-                 lock go, a server started is refused as if another one ran",
-            )?,
-        }
+        f.write_str(self.sessions.said())?;
         write!(
             f,
             ". Start it again once the database can be reached (exit code \
@@ -1185,8 +1261,8 @@ mod lock_tests {
     use tokio::sync::watch;
 
     use super::{
-        HeldLock, LOCK_UNCONFIRMED_LIMIT, LockLoss, LockUnconfirmed, OwnSessions, keep_the_lock,
-        lost_lock,
+        HeldLock, LOCK_UNCONFIRMED_LIMIT, LockLoss, LockTaken, LockUnconfirmed, OwnSessions,
+        keep_the_lock, lost_lock,
     };
 
     /// How a fake lock answers one ask.
@@ -1385,8 +1461,37 @@ mod lock_tests {
             ended.contains("stopped writing to the database at that moment"),
             "{ended}"
         );
-        assert!(ended.contains("the lock is free now"), "{ended}");
+        assert!(ended.contains("it holds the lock no more"), "{ended}");
         assert!(!ended.contains("before Postgres could give"), "{ended}");
+        // Review of #98: a refusal is not a database out of reach.
+        let refused = LockUnconfirmed {
+            after: Duration::from_secs(50),
+            sessions: OwnSessions::Refused,
+        }
+        .to_string();
+        assert!(refused.contains("refused to end its sessions"), "{refused}");
+        assert!(
+            !refused.contains("could not be reached on the way out"),
+            "{refused}"
+        );
+        let taken = LockTaken {
+            sessions: OwnSessions::Ended,
+        }
+        .to_string();
+        assert!(
+            taken.starts_with("another kage server is running on this database"),
+            "{taken}"
+        );
+        assert!(taken.contains("stopped writing to the database"), "{taken}");
+        assert_eq!(
+            OwnSessions::of(&Err(StoreError::Unreachable(Duration::from_secs(3)))),
+            OwnSessions::Unreachable
+        );
+        assert_eq!(
+            OwnSessions::of(&Err(StoreError::Unnamed)),
+            OwnSessions::Refused
+        );
+        assert_eq!(OwnSessions::of(&Ok(2)), OwnSessions::Ended);
         let unreachable = LockUnconfirmed {
             after: Duration::ZERO,
             sessions: OwnSessions::Unreachable,

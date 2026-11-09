@@ -91,18 +91,27 @@ pub const APPLICATION_NAME_PREFIX: &str = "kage ";
 impl Store {
     /// Connects with the configured pool size and timeout.
     ///
+    /// Every session of the store, and the server lock's, is named
+    /// `kage <id>` with an id of this store's own (`application_name`),
+    /// whatever the URL names, and keeps the lock's short TCP keepalives
+    /// ([`crate::KEEPALIVES`]): Postgres ends a session whose server
+    /// vanished without closing it about a minute after its last answer,
+    /// and nothing that server had sent on it runs later (review of #98).
+    ///
     /// # Errors
     ///
     /// Fails when the database cannot be reached.
-    ///
-    /// Every session of the store, and the server lock's, is named
-    /// `kage <id>` with an id of this store's own (`application_name`),
-    /// whatever the URL names.
     pub async fn connect(config: &DatabaseConfig) -> Result<Self, StoreError> {
-        let options = PgConnectOptions::from_str(config.url.expose())?.application_name(&format!(
-            "{APPLICATION_NAME_PREFIX}{}",
-            uuid::Uuid::now_v7().simple()
-        ));
+        let options = PgConnectOptions::from_str(config.url.expose())?
+            .application_name(&format!(
+                "{APPLICATION_NAME_PREFIX}{}",
+                uuid::Uuid::now_v7().simple()
+            ))
+            .options([
+                ("tcp_keepalives_idle", "30"),
+                ("tcp_keepalives_interval", "10"),
+                ("tcp_keepalives_count", "3"),
+            ]);
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(config.connect_timeout.get())
@@ -189,7 +198,8 @@ impl Store {
             let mut connection = PgConnection::connect_with(&options).await?;
             let ended: i64 = sqlx::query_scalar(
                 "SELECT count(*) FILTER (WHERE pg_terminate_backend(pid)) FROM pg_stat_activity \
-                 WHERE application_name = $1 AND pid <> pg_backend_pid()",
+                 WHERE application_name = $1 AND datname = current_database() \
+                 AND pid <> pg_backend_pid()",
             )
             .bind(&name)
             .fetch_one(&mut connection)
