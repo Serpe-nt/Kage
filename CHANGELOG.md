@@ -676,6 +676,11 @@ version's date is the day, in UTC, its tag was made.
   sidecar with any other volume. Compose creates the volume at the next
   `docker compose up`; a file a sidecar wrote at that moment and kage had
   not yet taken is lost with its page's screenshot or PDF.
+- **RUSTSEC-2026-0459 is accepted (`libsqlite3-sys` 0.37.0).** The
+  advisory names C SQLite's CVE-2026-119375; the crate is only an entry
+  of `Cargo.lock` (sqlx's SQLite driver, which Kage never enables), so no
+  binary builds or links it. Ignored until 2026-12-31 or the first sqlx on
+  `libsqlite3-sys` 0.39 (`docs/security-review.md`).
 
 ## [2.0.4] - 2026-11-07
 
