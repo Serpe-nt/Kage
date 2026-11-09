@@ -468,11 +468,13 @@ version's date is the day, in UTC, its tag was made.
   longer found and expire as before. Results stored before migration 0020
   (F122) read `truncated: false` whatever their body was: those bodies
   were not looked at.
-- **`robots.matched_rule` is the line of the file (QA round three,
-  level0-03).** Since F179 it was the rule as compared, an escape of an
-  unreserved character decoded and others in upper case
-  (`Disallow: /a/~user` for the file's `Disallow: /a/%7euser`); it is the
-  rule as the file writes it again, and the comparison is unchanged.
+- **`robots.matched_rule` names the pattern as the file writes it (QA
+  round three, level0-03).** Since F179 it was the rule as compared, an
+  escape of an unreserved character decoded and others in upper case
+  (`Disallow: /a/~user` for the file's `Disallow: /a/%7euser`); its
+  pattern is the file's again, and the comparison is unchanged. Its key
+  is always spelt `Allow:` or `Disallow:`, whatever the file's case or
+  spacing (QA round four's pool0-03: the documents said the whole line).
 - **An unreachable robots.txt is never `allowed: true` (QA round three,
   level0-04).** A page refused `robots_unavailable`, and a page of a site
   that reports its file while the file is kept as unreachable, say
