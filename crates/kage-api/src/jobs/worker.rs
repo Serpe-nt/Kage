@@ -59,7 +59,8 @@ use kage_core::ids::{JobId, JobItemId, PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::{Refusal, Visitors};
 use kage_core::schedule::queue::Priority;
-use kage_proxy::CredentialCipher;
+use kage_persona::PersonaError;
+use kage_proxy::{CredentialCipher, PoolError};
 use kage_scheduler::{
     Arrival, Capture, FetchOrder, FetchReport, INTERRUPTED, JobFetch, Running, SchedulerError, Stop,
 };
@@ -319,6 +320,28 @@ fn default_wait(reason: &str) -> Duration {
     }
 }
 
+/// An item that waits because the database could not be read or written.
+fn store_failed() -> ItemEnd {
+    ItemEnd::Deferred {
+        reason: "store".to_owned(),
+        until: None,
+    }
+}
+
+/// Whether a fetch failed on the database: the store, or the store under
+/// the persona manager or the proxy pool. Such a failure says nothing
+/// about the page (QA round four lock-01).
+fn the_stores(error: &SchedulerError) -> bool {
+    matches!(
+        error,
+        SchedulerError::Store(_)
+            | SchedulerError::Pool(PoolError::Store(_))
+            | SchedulerError::Persona(
+                PersonaError::Store(_) | PersonaError::Pool(PoolError::Store(_))
+            )
+    )
+}
+
 fn later(now: DateTime<Utc>, wait: Duration) -> DateTime<Utc> {
     chrono::Duration::from_std(wait)
         .ok()
@@ -413,10 +436,16 @@ impl Work {
         Ok(planned)
     }
 
-    /// Pins an order to the job's session, when it has one.
-    async fn pin(&self, planned: &mut Planned) -> Result<(), String> {
+    /// Pins an order to the job's session, when it has one. A session
+    /// that cannot be read now is the database's failure, not the item's:
+    /// the item waits (QA round four lock-01).
+    async fn pin(&self, planned: &mut Planned) -> Result<(), ItemEnd> {
         let Some(session) = &self.session else {
             return Ok(());
+        };
+        let failed = |code: ErrorCode| ItemEnd::Failed {
+            error: code.as_str().to_owned(),
+            outcome: None,
         };
         let found = self
             .engine
@@ -424,9 +453,9 @@ impl Work {
             .sessions()
             .resolve(self.key.id, session)
             .await
-            .map_err(|_| "internal".to_owned())?;
+            .map_err(|_| store_failed())?;
         let Some(found) = found else {
-            return Err(ErrorCode::SessionNotFound.as_str().to_owned());
+            return Err(failed(ErrorCode::SessionNotFound));
         };
         let host = planned.order.url.host_str().unwrap_or_default();
         let policy = self.state.policies().current().domains.resolve(host);
@@ -436,10 +465,10 @@ impl Work {
             Some(constraint) => Some(constraint),
             None => scout_conflict(&self.engine, &found.persona, planned)
                 .await
-                .map_err(|_| "internal".to_owned())?,
+                .map_err(|_| failed(ErrorCode::Internal))?,
         };
         if conflict.is_some() {
-            return Err(ErrorCode::SessionPersonaConflict.as_str().to_owned());
+            return Err(failed(ErrorCode::SessionPersonaConflict));
         }
         planned.order.pin = Some(found.persona.id);
         Ok(())
@@ -501,10 +530,9 @@ impl Work {
                     until: tomorrow,
                 })
             }
-            Err(_) => Err(ItemEnd::Failed {
-                error: "internal".to_owned(),
-                outcome: None,
-            }),
+            // The key's pages of the day could not be counted: the
+            // database's failure, not the item's.
+            Err(_) => Err(store_failed()),
         }
     }
 
@@ -555,6 +583,15 @@ impl Work {
                 error: ErrorCode::InvalidUrl.as_str().to_owned(),
                 outcome: None,
             },
+            // What the attempt came to could not be read or written: the
+            // database's failure (a cut, a fenced store), never the page's.
+            // The item stays this worker's, to be taken up again, or goes
+            // with the job's lease to whoever claims it next (QA round four
+            // lock-01).
+            Err(error) if the_stores(&error) => {
+                tracing::warn!(job = %self.job, %request, %error, "an item of a job could not be written; it waits");
+                store_failed()
+            }
             Err(error) => {
                 tracing::error!(job = %self.job, %request, %error, "an item of a job failed inside");
                 ItemEnd::Failed {
@@ -610,8 +647,8 @@ impl Work {
                 };
             }
         };
-        if let Err(error) = self.pin(&mut planned).await {
-            return failed(error);
+        if let Err(end) = self.pin(&mut planned).await {
+            return end;
         }
         // A page counts against the key's day when its request begins,
         // unless the response cache holds it: that is no visit.
@@ -756,6 +793,13 @@ async fn keep_lease(
                 }
             }
         }
+        if work.state.store().fenced() {
+            // No lease of a server that may have lost its lock is renewed:
+            // the job is claimed again once it ran out (QA round four
+            // lock-01).
+            raise(&signal, Signal::Lost);
+            return;
+        }
         let now = work.now();
         match work
             .state
@@ -809,6 +853,13 @@ impl Runner {
 
     /// Whether the job goes on, and if not, why.
     fn ending(&self) -> Option<Ending> {
+        if self.store().fenced() {
+            // The server may no longer hold its database's lock: nothing
+            // of the job is written from here on, and whoever claims it
+            // once its lease ran out takes it up as it stands (QA round
+            // four lock-01).
+            return Some(Ending::Lost);
+        }
         match *self.signal.borrow() {
             Signal::Lost => Some(Ending::Lost),
             Signal::Shutdown => Some(Ending::Shutdown),
@@ -1352,8 +1403,8 @@ impl Runner {
                 );
             }
         };
-        if let Err(error) = work.pin(&mut planned.planned).await {
-            return (id, keeps, failed(&error));
+        if let Err(end) = work.pin(&mut planned.planned).await {
+            return (id, keeps, end);
         }
         if earlier.is_none()
             && let Err(end) = work.spend_page().await
@@ -1738,8 +1789,11 @@ pub async fn run_worker(state: ApiState, shutdown: impl Future<Output = ()> + Se
     tracing::info!(worker = %state.jobs().worker, "the job worker is running");
     loop {
         while runners.try_join_next().is_some() {}
+        // A server that may no longer hold its database's lock claims
+        // nothing (QA round four lock-01).
+        let fenced = state.store().fenced();
         let free = most.saturating_sub(runners.len());
-        if free > 0 {
+        if free > 0 && !fenced {
             let now = state.clock().now();
             let claimed = state
                 .store()
@@ -1771,17 +1825,21 @@ pub async fn run_worker(state: ApiState, shutdown: impl Future<Output = ()> + Se
         // fetches nothing more, and its cancel is not to wait for a slot
         // that a job of hours holds (F109).
         let now = state.clock().now();
-        match state
-            .store()
-            .jobs()
-            .claim_cancelled(
-                state.jobs().worker,
-                crate::stored(now),
-                later(now, config.lease.get()),
-                CANCELLED_AT_ONCE,
-            )
-            .await
-        {
+        let cancelled = if fenced {
+            Ok(Vec::new())
+        } else {
+            state
+                .store()
+                .jobs()
+                .claim_cancelled(
+                    state.jobs().worker,
+                    crate::stored(now),
+                    later(now, config.lease.get()),
+                    CANCELLED_AT_ONCE,
+                )
+                .await
+        };
+        match cancelled {
             Ok(jobs) => {
                 for job in jobs {
                     tracing::debug!(job = %job.id, kind = job.kind.as_str(), "a cancelled job is taken up to end it");

@@ -187,12 +187,18 @@ theirs.
 
 `kage_server_lock_held` and `kage_server_lock_confirmed_timestamp_seconds`
 say whether the server still holds its database's lock (ADR 0005) and
-when it last saw it held. The look that confirms it runs every 15 s on
-the lock's own connection; cut that connection (a partition) and the
-look hangs until TCP gives up, while the server serves on, and another
-server may take the lock meanwhile. Neither gauge moves then: query the
-age, `time() - kage_server_lock_confirmed_timestamp_seconds`, which
-stays under 30 s on a healthy server.
+when it last saw it held. The look that confirms it runs every 15 s and
+gives up after 5 s. Cut the server off from its database (a partition)
+and `kage_server_lock_held` drops to 0 at the first look, while the age,
+`time() - kage_server_lock_confirmed_timestamp_seconds` (under about 30 s
+on a healthy server), grows: past 35 s `KageServerLockUnconfirmed` fires.
+At 45 to 50 s the server stops writing to the database and stops by
+itself with exit code 75, before Postgres could give the lock to another
+server; then `KageDown` takes over. The metrics listener this profile
+scrapes serves the lock's series all the while; the API's own `/metrics`
+cannot look up its key during a cut and answers `500` (QA round four
+lock-03). A cut that heals before that keeps the server: its next look
+takes the lock again on a new connection.
 
 `kage_proxy_state{state}` counts a proxy under the state its last probe
 left it in. A proxy whose backoff ran out is `degraded` in the store and in

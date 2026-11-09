@@ -1032,10 +1032,15 @@ loop, of `budget_exhausted` a key whose day is spent.
 The server's lock on its database (one server per database, ADR 0005):
 `kage_server_lock_held` is 1 while the server's latest look (every 15 s)
 found it holding the lock, and `kage_server_lock_confirmed_timestamp_seconds`
-is when it last did. A look sent into a cut connection hangs and moves
-neither, so watch the age: `time() -
-kage_server_lock_confirmed_timestamp_seconds > 60` is a server that serves
-on a lock it cannot confirm, and another server may hold it meanwhile.
+is when it last did. Scrape them from the metrics listener
+(`server.metrics_bind`): during a cut the API's own `/metrics` cannot look
+up the key and answers `500`, while the listener serves the series the
+server keeps itself whatever the database does. The age, `time() -
+kage_server_lock_confirmed_timestamp_seconds`, stays under about 30 s on a
+healthy server; past 35 s the server is cut off from its database
+(`KageServerLockUnconfirmed`), and it stops writing and stops by itself
+45 to 50 s after its last confirmation, before Postgres could give the
+lock to another server (spec §16.6).
 
 For jobs: `kage_jobs{job_type,state}` (a growing `paused` is sites that
 are closed or personas that sleep; a growing `queued` is more work than

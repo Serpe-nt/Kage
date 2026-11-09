@@ -28,6 +28,11 @@ use crate::state::ApiState;
 /// second does not ask the database and the sidecars every second.
 const READINESS_TTL: Duration = Duration::from_secs(2);
 
+/// How long a scrape waits for the series read from the database: a
+/// database that does not answer (a cut) leaves them out of the scrape and
+/// holds up none of the others (QA round four lock-03).
+const STORED_PATIENCE: Duration = Duration::from_secs(2);
+
 /// How long a sidecar may take to answer a readiness or metrics question.
 const SIDECAR_PATIENCE: Duration = Duration::from_secs(3);
 
@@ -320,7 +325,12 @@ pub(crate) async fn render_metrics(state: &ApiState) -> String {
     if let Some(handle) = state.metrics() {
         expositions.push(handle.render());
     }
-    expositions.push(stored_gauges(state).await);
+    // What the database holds waits for it no longer than this: the
+    // series the server keeps itself (its lock's among them) are served
+    // whatever the database does (QA round four lock-03).
+    if let Ok(stored) = tokio::time::timeout(STORED_PATIENCE, stored_gauges(state)).await {
+        expositions.push(stored);
+    }
     if let Some(engine) = state.engine() {
         let sidecars = engine.personas.sidecars();
         let (chromium, firefox) = tokio::join!(

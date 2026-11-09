@@ -378,9 +378,10 @@ impl Drop for InFlight {
 /// three lock-02): `kage_server_lock_held` is 1 while the latest look
 /// found the lock held and 0 from a look that did not until it is held
 /// again; `kage_server_lock_confirmed_timestamp_seconds` is when it was
-/// last seen held. A look that hangs (the lock's connection cut off) moves
-/// neither, so the age of the timestamp is what tells an operator that the
-/// server serves on a lock it cannot confirm.
+/// last seen held. A server cut off from its database keeps the timestamp
+/// of its last confirmation, and the metrics listener serves it all the
+/// while: its age tells an operator, before the server stops by itself,
+/// that it cannot confirm the lock (QA round four lock-03).
 pub fn server_lock(held: bool, at: chrono::DateTime<chrono::Utc>) {
     metrics::gauge!("kage_server_lock_held").set(if held { 1.0 } else { 0.0 });
     if held {

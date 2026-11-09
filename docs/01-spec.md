@@ -3218,19 +3218,40 @@ jobs in the scheduler. Kage is single-instance (ADR 0005): a server holds
 a Postgres advisory lock on its database for its whole life, on a
 connection of its own, and a second server on the same database refuses to
 start and says so; one that lost its connection and finds the lock taken
-by another stops (F174). The lock is looked at every 15 s, and a look
-(and a take after a lost connection) answers within 5 s or confirms
-nothing. A server stops when a look made 40 s or more after its last
-confirmation fails to confirm too, which is 45 to 55 s after that
+by another stops (F174). The lock is looked at every 15 s, and each look
+has a deadline of its own: it answers within 5 s or confirms nothing. A
+look that confirmed nothing leaves the lock's connection behind what the
+network held up, so the next look takes the lock again on a new
+connection instead of queueing behind it, and ends a session of the
+server's own that still holds it; the first look after a cut heals
+confirms the lock (QA round four lock-04: a 28 s cut over one look
+stopped a server 7.7 s after the heal, its own session still holding the
+lock). A server decides to stop when a look made 40 s or more after its
+last confirmation fails to confirm too, which is 45 to 50 s after that
 confirmation; it always looks first, since a session that was silent for
-a while may answer again. It then cuts the pages under way at once
-(`interrupted`; no `jobs.wind_down`) and exits with code 75, since no other
-server was seen: Postgres gives a silent session's lock up about a minute
-after its last answer, so the server stops serving and claiming jobs
-before another could take the lock, and the jobs it held are claimed
-again once their leases run out (QA round three's lock-02; a network that
-dropped every packet had a server serve on, `/readyz` ready, for 4 to
-51 s beside a second one that held the lock). A job whose worker stopped is claimed again when
+a while may answer again. At that instant it fences its store: the pool
+is closed, so no claim, lease renewal, item, job, persona or session
+write of the server's leaves for the database from then on, and its
+runners take their jobs as no longer theirs. It then cuts the pages
+under way at once (`interrupted`; no `jobs.wind_down`; nothing of them
+is written), and exits with code 75, since no other server was seen,
+within 20 s of its decision (10 s for what runs to end, 5 s for the
+browsers, 3 s for its sessions, 2 s for its last traces). Postgres gives a silent session's lock
+up about a minute after its last answer, so the server has stopped
+writing before another could take the lock, and the jobs it held are
+claimed again once their leases run out (QA round three's lock-02; QA
+round four lock-01: a server went on writing for 8 to 60 s after its
+decision, its items `failed` `internal`, its jobs `failed`, and a claim
+and persona writes after a second server had taken the lock). On its
+way out it ends its own sessions in the database (their
+`application_name` is `kage <id>`, an id of the process's own) over a
+new connection when the database can be reached: the lock is free at
+once, and a statement a cut network held up does not run after it (QA
+round four lock-02: the next server was refused five or six times as if
+another ran). What a page came to that cannot be written for the
+database (a cut, a fenced store) is never the page's failure: the item
+waits (`store`) for its worker, or for whoever claims the job next (QA
+round four lock-01). A job whose worker stopped is claimed again when
 its lease ran out, by the server started after it, and goes on where its
 items stand: Postgres lets the lock go with the session of a server that
 was killed, so the next one starts at once. The persona's context may
@@ -3876,9 +3897,12 @@ are gzip-compressed on disk.
   `kage_server_lock_held` (1 while the latest look found it held, 0 from
   a look that did not until it is held again) and
   `kage_server_lock_confirmed_timestamp_seconds` (when it was last seen
-  held; a look that hangs on a cut connection moves neither, so the age
-  of this timestamp is what shows a server serving on a lock it cannot
-  confirm; lock-02).
+  held). During a cut the API's `/metrics` answers no scrape (its key
+  cannot be looked up), while the metrics listener (`server.metrics_bind`)
+  serves the series the server keeps itself whatever the database does,
+  and leaves out those it reads from the database after 2 s: the age of
+  the timestamp grows past 35 s before the server stops at 45 to 50 s,
+  and `KageServerLockUnconfirmed` fires (lock-02; QA round four lock-03).
   Jobs add `kage_jobs{job_type,state}`, `kage_job_items{state}` (what
   waits and what is being worked) and `kage_webhook_deliveries_pending`,
   read from the store at the scrape, and `kage_jobs_accepted_total{job_type,level}`,

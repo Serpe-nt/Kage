@@ -50,6 +50,17 @@ impl Telemetry {
             tracing::warn!(%error, "the last traces could not be sent");
         }
     }
+
+    /// Shuts down as [`Telemetry::shut_down`], within two seconds when
+    /// `bounded`: a server that stopped for its database's lock exits
+    /// within its bound (spec §16.6, QA round four lock-01).
+    pub(crate) async fn shut_down_within(self, bounded: bool) {
+        if bounded {
+            let _ = tokio::time::timeout(Duration::from_secs(2), self.shut_down()).await;
+        } else {
+            self.shut_down().await;
+        }
+    }
 }
 
 /// Installs the log subscriber and the tracer: JSON lines on stdout (or on

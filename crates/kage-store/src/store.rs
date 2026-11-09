@@ -1,9 +1,14 @@
 //! The connection pool, the migrations and the repositories.
 
+use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use kage_core::config::DatabaseConfig;
-use sqlx::PgPool;
 use sqlx::migrate::Migrator;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{Connection, PgConnection, PgPool};
 
 use crate::StoreError;
 use crate::repo::{
@@ -68,10 +73,20 @@ impl MigrationStatus {
 
 /// Access to Postgres: the pool, the migrations and one repository per
 /// group of tables.
+///
+/// A server that may no longer hold its database's lock fences its store
+/// ([`Store::fence`]): from that instant nothing it writes reaches the
+/// database (QA round four lock-01).
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: PgPool,
+    fenced: Arc<AtomicBool>,
 }
+
+/// The prefix of the `application_name` of a server's sessions; the rest is
+/// the server's own id, so that it can find its own sessions and end them
+/// ([`Store::end_own_sessions`]).
+pub const APPLICATION_NAME_PREFIX: &str = "kage ";
 
 impl Store {
     /// Connects with the configured pool size and timeout.
@@ -79,18 +94,29 @@ impl Store {
     /// # Errors
     ///
     /// Fails when the database cannot be reached.
+    ///
+    /// Every session of the store, and the server lock's, is named
+    /// `kage <id>` with an id of this store's own (`application_name`),
+    /// whatever the URL names.
     pub async fn connect(config: &DatabaseConfig) -> Result<Self, StoreError> {
+        let options = PgConnectOptions::from_str(config.url.expose())?.application_name(&format!(
+            "{APPLICATION_NAME_PREFIX}{}",
+            uuid::Uuid::now_v7().simple()
+        ));
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(config.connect_timeout.get())
-            .connect(config.url.expose())
+            .connect_with(options)
             .await?;
-        Ok(Self { pool })
+        Ok(Self::from_pool(pool))
     }
 
     /// Wraps an existing pool.
-    pub const fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self {
+            pool,
+            fenced: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// The underlying pool.
@@ -101,6 +127,79 @@ impl Store {
     /// Closes every connection. Queries after this fail.
     pub async fn close(&self) {
         self.pool.close().await;
+    }
+
+    /// Fences the store at once: from this call on, no statement of this
+    /// store's leaves for the database. The pool is closed: what waits for
+    /// a connection and what asks for one later is refused at once
+    /// (`PoolClosed`), and a connection given back is closed, not used
+    /// again. Every clone of the store is fenced with it, and so is
+    /// whatever shares its pool (the artifact store). A statement already
+    /// on its way when the store is fenced is not called back: see
+    /// [`Store::end_own_sessions`].
+    ///
+    /// A server fences its store when it may no longer hold its database's
+    /// lock (ADR 0005; QA round four lock-01): another server may take the
+    /// lock soon, and the jobs this one held are claimed again once their
+    /// leases run out.
+    pub fn fence(&self) {
+        if !self.fenced.swap(true, Ordering::SeqCst) {
+            // The pool is marked closed by the call itself; the future
+            // only waits for the connections in use to come back, which a
+            // cut network may hold up for long.
+            let closing = self.pool.close();
+            drop(closing);
+        }
+    }
+
+    /// Whether the store was fenced ([`Store::fence`]).
+    pub fn fenced(&self) -> bool {
+        self.fenced.load(Ordering::SeqCst)
+    }
+
+    /// The `application_name` this store's sessions carry, when it named
+    /// them ([`Store::connect`]).
+    pub fn application_name(&self) -> Option<String> {
+        self.pool
+            .connect_options()
+            .get_application_name()
+            .filter(|name| name.starts_with(APPLICATION_NAME_PREFIX))
+            .map(str::to_owned)
+    }
+
+    /// Ends every session of this store's in the database, the server
+    /// lock's among them, over a connection of its own that is closed
+    /// afterwards; within `within`. A fenced server does this on its way
+    /// out: a session its process can no longer close (a network that was
+    /// cut while it dropped the connection) would otherwise hold the lock,
+    /// and whatever was sent on it, until Postgres gives it up about a
+    /// minute later (QA round four lock-02). Returns how many sessions
+    /// were ended.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the store's sessions carry no name of its own, or the
+    /// database cannot be reached within `within`.
+    pub async fn end_own_sessions(&self, within: Duration) -> Result<u64, StoreError> {
+        let Some(name) = self.application_name() else {
+            return Err(StoreError::Unnamed);
+        };
+        let options = (*self.pool.connect_options()).clone();
+        let ending = async move {
+            let mut connection = PgConnection::connect_with(&options).await?;
+            let ended: i64 = sqlx::query_scalar(
+                "SELECT count(*) FILTER (WHERE pg_terminate_backend(pid)) FROM pg_stat_activity \
+                 WHERE application_name = $1 AND pid <> pg_backend_pid()",
+            )
+            .bind(&name)
+            .fetch_one(&mut connection)
+            .await?;
+            connection.close().await?;
+            Ok::<_, StoreError>(u64::try_from(ended).unwrap_or(0))
+        };
+        tokio::time::timeout(within, ending)
+            .await
+            .map_err(|_| StoreError::Unreachable(within))?
     }
 
     /// Applies every migration that has not been applied yet. Running it

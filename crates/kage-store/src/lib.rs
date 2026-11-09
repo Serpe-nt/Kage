@@ -23,7 +23,7 @@ mod store;
 pub use artifact_store::{ArtifactError, ArtifactStore, NewArtifact, SweepReport};
 pub use error::StoreError;
 pub use server_lock::{KEEPALIVES, SERVER_LOCK, ServerLock};
-pub use store::{MigrationState, MigrationStatus, Store};
+pub use store::{APPLICATION_NAME_PREFIX, MigrationState, MigrationStatus, Store};
 
 /// Name of this crate as recorded in its manifest.
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
