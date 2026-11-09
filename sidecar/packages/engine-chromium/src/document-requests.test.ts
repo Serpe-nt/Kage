@@ -277,6 +277,20 @@ describe('a 304 Chrome kept no page for (class-02)', () => {
     });
   });
 
+  it('is the 304 a redirect led to, at its own address only (QA round four, b85-01)', () => {
+    const requests = new DocumentRequests(MAIN);
+    requests.requested(asked('R', 'http://site.test/r'));
+    requests.seen(seen('R', 302, '/nm'));
+    requests.requested(asked('R', 'http://site.test/nm', true));
+    requests.seen({ requestId: 'R', statusCode: 304, headers: { etag: '"x"' } });
+    expect(requests.notModified('http://site.test/nm')).toEqual({
+      status: 304,
+      headers: [{ name: 'etag', value: '"x"' }],
+    });
+    // The redirect's own address answered `302`, not the 304.
+    expect(requests.notModified('http://site.test/r')).toBeNull();
+  });
+
   it('is nothing for a kept page brought up to date, or any other answer', () => {
     const requests = new DocumentRequests(MAIN);
     requests.requested(asked('V', 'http://site.test/kept'));

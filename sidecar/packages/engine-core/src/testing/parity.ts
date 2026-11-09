@@ -1214,6 +1214,19 @@ export function defineParitySuite(subject: ParitySubject): void {
         expect(value(result, 'etag'), `visit ${index}`).toBe('"v1"');
       }
       expect(value(again, 'set-cookie')).toBeNull();
+      // The order of the lines: the first visit's as the site sent them
+      // (HTTP/1, browser-04), and the revalidated page's as Firefox kept
+      // them. Chrome's debugger announces that page in an order of its own
+      // and quotes only the 304's lines from the wire, so its order is not
+      // the site's (QA round four, b85-02).
+      const names = (result: PageResult) =>
+        result.headers.map((header) => header.name.toLowerCase());
+      const before = (result: PageResult, first: string, second: string) =>
+        names(result).indexOf(first) < names(result).indexOf(second);
+      expect(before(first, 'etag', 'cache-control'), JSON.stringify(names(first))).toBe(true);
+      if (subject.keptHeadsFile !== undefined) {
+        expect(before(again, 'etag', 'cache-control'), JSON.stringify(names(again))).toBe(true);
+      }
       // The same page sent gzipped: the browser keeps the encoded bytes
       // (Firefox's cache entry holds them as they came), and the body
       // reported is the page, decoded, in both engines.
@@ -1283,6 +1296,91 @@ export function defineParitySuite(subject: ParitySubject): void {
             title: null,
           });
           expect(moved.error?.code, `round ${round}`).toBe('navigation_failed');
+        }
+      });
+    });
+
+    it('takes a 304 the browser kept no page for as the site’s answer behind a redirect and from a flow’s goto (QA round four, b85-01)', async () => {
+      const unkept = (id: string) => named(`/status/not-modified?id=${id}`);
+      const via = (id: string) =>
+        named(`/guard/redirect?to=${encodeURIComponent(`/status/not-modified?id=${id}`)}`);
+      const seen = (result: PageResult) =>
+        JSON.stringify({
+          status: result.status,
+          final_url: result.final_url,
+          error: result.error,
+          headers: result.headers,
+          redirects: result.redirects,
+          unanswered_url: result.unanswered_url,
+          dom: result.dom_html?.slice(0, 80) ?? null,
+        });
+      const site304 = (result: PageResult, at: string) => {
+        expect(result.status, seen(result)).toBe(304);
+        expect(result.headers.find((header) => header.name.toLowerCase() === 'etag')?.value).toBe(
+          '"x"',
+        );
+        // Broken off as at a `204` in Chrome, shown in Camoufox: never a
+        // load that failed.
+        expect([null, 'aborted']).toContain(result.error?.code ?? null);
+        expect(result.final_url).toBe(at);
+        expect(result.unanswered_url ?? null).toBeNull();
+      };
+      await withContext('unkept-304', async (context) => {
+        // Typed, behind a redirect: the redirect is a hop of the chain.
+        const redirected = await go(context, via('typed-via'), { capture: DOM });
+        site304(redirected, unkept('typed-via'));
+        expect(redirected.redirects.map((hop) => [hop.url, hop.status])).toEqual([
+          [via('typed-via'), 302],
+        ]);
+        // A flow's goto, straight and behind a redirect: the step went
+        // where it was sent, and the flow's page is the site's 304.
+        for (const [address, at] of [
+          [unkept('flow'), unkept('flow')],
+          [via('flow-via'), unkept('flow-via')],
+        ] as const) {
+          const run = await flow(context, {
+            actions: [
+              { action: 'goto', url: named('/landing') },
+              { action: 'goto', url: address },
+            ],
+          });
+          expect(
+            run.steps.map((step) => [step.action, step.ok]),
+            JSON.stringify(run.steps.map((step) => step.error)),
+          ).toEqual([
+            ['goto', true],
+            ['goto', true],
+          ]);
+          site304(run.final.result, at);
+        }
+        // A flow's goto answered with no content, straight and behind a
+        // redirect: a step that went where it was sent, as typed (both
+        // engines failed it `aborted`).
+        for (const [address, at, status] of [
+          [named('/no-content?status=205'), named('/no-content?status=205'), 205],
+          [named('/no-content/after-redirect'), named('/no-content?status=204&via=redirect'), 204],
+        ] as const) {
+          const run = await flow(context, {
+            actions: [
+              { action: 'goto', url: named('/landing') },
+              { action: 'goto', url: address },
+            ],
+          });
+          expect(
+            run.steps.map((step) => [step.action, step.ok]),
+            JSON.stringify(run.steps.map((step) => step.error)),
+          ).toEqual([
+            ['goto', true],
+            ['goto', true],
+          ]);
+          expect(run.final.result, seen(run.final.result)).toMatchObject({
+            status,
+            final_url: at,
+            dom_html: null,
+          });
+          // As a typed address so answered reads: what Kage takes for the
+          // site's answer with no page.
+          expect(run.final.result.error?.code).toBe('aborted');
         }
       });
     });

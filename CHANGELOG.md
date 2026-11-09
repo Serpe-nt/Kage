@@ -79,6 +79,22 @@ version's date is the day, in UTC, its tag was made.
   reports the wire's `304` and its fields, which Chrome's debugger heard,
   where Chrome broke the load off. It was `provider_error`, `aborted`,
   with no status, on Chrome.
+- **A `304` the browser kept no page for, behind a redirect and from a
+  flow (QA round four, b85-01).** The same `304` reached through a
+  redirect is `ok` with its `304`, its fields and its own address on
+  Chrome too, the redirect among the hops (it was `provider_error`,
+  `aborted`, status `302`, `final_url` `about:blank`). A flow's `goto`
+  the site answers with no page (that `304`, a `204` or a `205`, a
+  redirect before it included) is a step that went where it was sent, and
+  the flow goes on, its page that answer, as a typed address's is: the
+  step failed `aborted` (`flow_step_failed`, the job `failed`), on Chrome
+  for the `304`, in both engines for a `204` or `205`.
+- **A revalidated page's header order on Chrome, documented (QA round
+  four, b85-02).** A page Chrome revalidated (answered `304`) has its
+  lines in the order Chrome's debugger announces them, not the site's:
+  the debugger quotes only the 304's own lines from the wire. The spec and
+  the Chromium runbook now say so; Firefox keeps the order it kept the
+  page's head in.
 - **A file the browser saved carries no body (QA round three,
   crawl-04).** A typed address answered with a file (`ok`, reason
   `download`) has no `raw_body` and keeps no `raw_body` artifact in either
