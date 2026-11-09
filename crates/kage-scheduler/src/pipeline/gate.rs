@@ -64,6 +64,18 @@ pub(super) enum Gate {
     Stopped,
 }
 
+/// The gate of an address whose enforced file cannot be had now. The
+/// page is refused (a job's waits), and what its result reports of the
+/// file is never `allowed` beside that refusal: whether the file is kept
+/// as unreachable, or could not be asked for at all (no scout, or an
+/// attempt that failed before the site had a say), it disallows the
+/// address until it is asked for again (RFC 9309 §2.3.1.4; QA round
+/// three's level0-04, round four's pool0-01).
+fn unavailable(course: &mut Course, reason: &'static str, retry_at: Option<DateTime<Utc>>) -> Gate {
+    course.robots = Some(robots::unreachable());
+    Gate::Unavailable { reason, retry_at }
+}
+
 /// What a crawl is told about an address before it asks for it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Peek {
@@ -672,10 +684,8 @@ impl Pipeline {
             match self.ask(&call, stop).await? {
                 Asked::Known(known) => known,
                 Asked::NoScout => {
-                    return Ok(Gate::Unavailable {
-                        reason: ROBOTS_NO_SCOUT,
-                        retry_at: self.later(self.robots.error_ttl),
-                    });
+                    let retry_at = self.later(self.robots.error_ttl);
+                    return Ok(unavailable(course, ROBOTS_NO_SCOUT, retry_at));
                 }
                 // The scout is not ready and nobody knows until when: the
                 // verdict cannot be had now.
@@ -684,10 +694,8 @@ impl Pipeline {
                     retry_at: None,
                 })
                 | Asked::NoAnswer => {
-                    return Ok(Gate::Unavailable {
-                        reason: ROBOTS_UNAVAILABLE,
-                        retry_at: self.later(NOT_ASKED_WAIT),
-                    });
+                    let retry_at = self.later(NOT_ASKED_WAIT);
+                    return Ok(unavailable(course, ROBOTS_UNAVAILABLE, retry_at));
                 }
                 Asked::Refused(refused) => return Ok(Gate::Refused(refused)),
                 Asked::Stopped => return Ok(Gate::Stopped),
@@ -696,11 +704,11 @@ impl Pipeline {
         let Some(verdict) = known.verdict(&self.robots.agents, &url) else {
             // Unreachable means disallowed (RFC 9309 §2.3.1.4) until the
             // file is asked for again, and the result says so.
-            course.robots = Some(robots::unreachable());
-            return Ok(Gate::Unavailable {
-                reason: ROBOTS_UNAVAILABLE,
-                retry_at: Some(known.expires_at),
-            });
+            return Ok(unavailable(
+                course,
+                ROBOTS_UNAVAILABLE,
+                Some(known.expires_at),
+            ));
         };
         let allowed = verdict.allowed;
         let floor = robots::gap_floor(&verdict);

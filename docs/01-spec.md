@@ -2958,7 +2958,9 @@ As built (the OpenAPI document is the contract):
   document. `robots` is `{ fetched, allowed, matched_rule, crawl_delay }`
   on every result that got as far as the site's policy; `fetched: false`
   says that nothing is known of the file (the default: nobody asks), or,
-  with `allowed: false`, that the file is kept as unreachable.
+  with `allowed: false`, that the file could not be had: it is kept as
+  unreachable, or no scout could bring it. A page refused
+  `robots_unavailable` or `robots_no_scout` never says `allowed: true`.
 - `outcome: "robots_denied"` is a result like a block: `200`, no attempts,
   nothing asked of the site. Its `reason` is null when a rule of the file
   disallows the address (`robots.matched_rule` names it),

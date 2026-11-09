@@ -562,6 +562,15 @@ version's date is the day, in UTC, its tag was made.
   that did not answer, after a `goto` or a click, and the timeout is
   that site's. A shown page that answered with a server error itself is
   booked its own error, wherever it sent the tab after.
+- **A robots.txt no scout could bring is never `allowed: true` either
+  (QA round four, pool0-01).** level0-04's fix reached only a file kept as
+  unreachable. A page refused `robots_unavailable` because the scout's
+  attempt failed before the site had a say (the proxy refused the
+  `CONNECT`, or could not reach the site; nothing is kept then), and a
+  page refused `robots_no_scout`, still said
+  `robots: { fetched: false, allowed: true }` beside the refusal, at
+  level 0 and level 2. They say `allowed: false`.
+
 ### Changed
 
 - **Durations are at most ten years (QA round three api-08).** A duration

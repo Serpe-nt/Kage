@@ -21,6 +21,7 @@ use kage_core::domain::{Header, Level, Render, RobotsVerdict, Timing};
 use kage_core::ids::{PersonaId, RequestId};
 use kage_core::outcome::Outcome;
 use kage_core::schedule::planner::Refusal;
+use kage_core::schedule::politeness::Courtesy;
 use kage_core::schedule::queue::Priority;
 use kage_http::Fetched;
 use kage_scheduler::{
@@ -553,6 +554,59 @@ async fn a_file_that_is_not_there_allows_everything_and_one_that_cannot_be_had_n
     world.shut_down().await;
 }
 
+/// QA round four's pool0-01: level0-04 reached only a file kept as
+/// unreachable. A file the scout could not bring because its attempt
+/// failed before the site had a say (the proxy refused the `CONNECT`, or
+/// could not reach the site) is not kept, and the page it refuses says
+/// `allowed: false` all the same, at level 0 and in a browser.
+#[tokio::test(start_paused = true)]
+async fn a_file_no_scout_could_bring_is_never_allowed_beside_its_refusal() {
+    let mut world = World::new(4, SITES);
+    let refused = || {
+        AttemptOutput::failed(
+            Outcome::ProviderError,
+            "proxy_refused",
+            Courtesy::NotTheSite,
+        )
+    };
+    world
+        .script
+        .when_plain(move |job| (job.url.path() == "/robots.txt").then(refused));
+    robots_txt(&world, move |_| refused());
+    let plain = FetchOrder {
+        level: Level::Plain,
+        ..get("https://enforced.example/a")
+    };
+    for order in [plain, get("https://enforced.example/b")] {
+        let level = order.level;
+        let report = world.pipeline.fetch(order).await.unwrap();
+        assert_eq!(report.outcome, Outcome::RobotsDenied, "{level:?}");
+        assert_eq!(
+            report.reason.as_deref(),
+            Some(ROBOTS_UNAVAILABLE),
+            "{level:?}"
+        );
+        assert_eq!(report.robots, Some(UNREACHABLE), "{level:?}");
+        assert_eq!(report.attempts.len(), 0, "{level:?}");
+    }
+    assert!(
+        world
+            .backend
+            .robots_entry("https://enforced.example")
+            .is_none()
+    );
+    // No page of the origin was asked for.
+    assert_eq!(asked(&world).1, []);
+    assert!(
+        world
+            .script
+            .plain_seen()
+            .iter()
+            .all(|seen| seen.job.url.path() == "/robots.txt")
+    );
+    world.shut_down().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_scout_that_is_turned_away_cools_down_like_any_persona() {
     let mut world = World::new(4, SITES);
@@ -680,6 +734,9 @@ async fn nobody_scouts_a_site_that_every_persona_reads() {
         .unwrap();
     assert_eq!(report.outcome, Outcome::RobotsDenied);
     assert_eq!(report.reason.as_deref(), Some(ROBOTS_NO_SCOUT));
+    // Nothing could be had of the file, and the page it refuses never
+    // says `allowed` (QA round four's pool0-01).
+    assert_eq!(report.robots, Some(UNREACHABLE));
     assert!(report.retry_at.is_some());
     assert_eq!(alone.script.seen().len(), 0);
     assert_eq!(alone.backend.scout_of("enforced.example"), None);
