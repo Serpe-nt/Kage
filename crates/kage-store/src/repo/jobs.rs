@@ -748,11 +748,10 @@ impl JobRepo<'_> {
     /// to (its `max_pages`, kept with it, less the items it has begun), so
     /// that its pages are bounded from its acceptance; one whose `max_pages`
     /// is not kept yet counts `most_pages`. A fetch carried on as a job
-    /// (`sync_overflow`) is the fetch's, not a job the key made: the bound
+    /// (`sync_overflow`) is the fetch's, not a job the key made: this bound
     /// never refuses it, so it does not count toward it either (QA round
-    /// four, api-05); such fetches are bounded by the key's own limits on
-    /// fetches (`max_concurrent`, `requests_per_minute`,
-    /// `daily_page_budget`).
+    /// four, api-05); such fetches have a bound of their own
+    /// ([`JobRepo::open_carried_of_key`], `jobs.max_open_carried_per_key`).
     ///
     /// # Errors
     ///
@@ -786,6 +785,25 @@ impl JobRepo<'_> {
             jobs: to_u64(("jobs", "count"), row.jobs)?,
             queued_items: to_u64(("job_items", "count"), row.items)?,
         })
+    }
+
+    /// How many fetches carried on as jobs (`origin` `sync_overflow`) one key
+    /// has open: queued, running or paused (`jobs.max_open_carried_per_key`,
+    /// the owner's decision on QA round four's api-05).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the query fails.
+    pub async fn open_carried_of_key(&self, api_key_id: ApiKeyId) -> Result<u64, StoreError> {
+        let count = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "carried!" FROM jobs
+               WHERE api_key_id = $1 AND origin = 'sync_overflow'
+                 AND state IN ('queued', 'running', 'paused')"#,
+            api_key_id.as_uuid(),
+        )
+        .fetch_one(self.pool)
+        .await?;
+        to_u64(("jobs", "count"), count)
     }
 
     /// How many jobs of each kind are in each state.

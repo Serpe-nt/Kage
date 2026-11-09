@@ -1101,3 +1101,50 @@ async fn a_fetch_that_is_carried_on_as_a_job_becomes_part_of_it() {
             .unwrap()
     );
 }
+
+/// L2 and the owner's decision on QA round four's api-05: the jobs a key
+/// asked for and the fetches carried on as jobs are counted apart. A
+/// carried fetch is neither one of `open_of_key`'s jobs nor its waiting
+/// items, however its item waits; `open_carried_of_key` counts it while it
+/// is queued, running or paused, and no more once it ended, nor another
+/// key's.
+#[tokio::test]
+async fn a_keys_carried_fetches_are_counted_apart_from_its_jobs() {
+    let db = TestDb::migrated().await;
+    let key = common::seed_key(&db.store).await;
+    let other = common::seed_key(&db.store).await;
+    let jobs = db.store.jobs();
+    let start = now();
+
+    let asked = job(key.id, start, 2);
+    jobs.create(&asked, &items(&asked, &["a.example", "b.example"]), start)
+        .await
+        .unwrap();
+    let mut carried = Vec::new();
+    for state in [
+        JobState::Queued,
+        JobState::Running,
+        JobState::Paused,
+        JobState::Succeeded,
+    ] {
+        let mut one = job(key.id, start, 1);
+        one.origin = JobOrigin::SyncOverflow;
+        one.state = state;
+        // A carried fetch whose item still waits is no waiting item either.
+        jobs.create(&one, &items(&one, &["c.example"]), start)
+            .await
+            .unwrap();
+        carried.push(one);
+    }
+    let mut theirs = job(other.id, start, 1);
+    theirs.origin = JobOrigin::SyncOverflow;
+    jobs.create(&theirs, &items(&theirs, &["d.example"]), start)
+        .await
+        .unwrap();
+
+    let open = jobs.open_of_key(key.id, 100).await.unwrap();
+    assert_eq!((open.jobs, open.queued_items), (1, 2));
+    assert_eq!(jobs.open_carried_of_key(key.id).await.unwrap(), 3);
+    assert_eq!(jobs.open_carried_of_key(other.id).await.unwrap(), 1);
+    assert_eq!(jobs.open_carried_of_key(ApiKeyId::new()).await.unwrap(), 0);
+}

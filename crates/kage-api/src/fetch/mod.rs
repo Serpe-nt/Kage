@@ -213,7 +213,7 @@ fn failed(error: &SchedulerError) -> ApiError {
         (status = 404, description = "`session_not_found`.", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "`session_persona_conflict`.", body = Problem, content_type = "application/problem+json"),
         (status = 422, description = "The request cannot be made as asked; `code` says why.", body = Problem, content_type = "application/problem+json"),
-        (status = 429, description = "A limit of the key or of the API; `Retry-After` says when.", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "A limit of the key or of the API; `Retry-After` says when. `jobs_limited`: the key has as many fetches carried on as jobs open as it may have (`jobs.max_open_carried_per_key`), with `open_carried` and `max_open_carried`.", body = Problem, content_type = "application/problem+json"),
         (status = 503, description = "Nothing can be fetched: no proxy pool, or the server stops.", body = Problem, content_type = "application/problem+json"),
     ),
     security(("api_key" = ["fetch"]))
@@ -275,6 +275,9 @@ pub(crate) async fn fetch(
         .await
         .map_err(|error| failed(&error))?;
     if !held {
+        // A key's fetches carried on as jobs are bounded where a fetch is
+        // accepted (QA round four, api-05; L2).
+        crate::jobs::within_carried_limit(&state, &caller).await?;
         let store = state.store().clone();
         let key = caller.key.id;
         state

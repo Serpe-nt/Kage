@@ -560,11 +560,16 @@ jobs:
   # Items of all jobs that wait in the scheduler or are being fetched at
   # once. The scheduler's own caps still decide what leaves.
   max_items_in_flight: 24
-  # Jobs one key may have open (queued, running or paused) at once; one
-  # more is refused with 429 jobs_limited. A fetch carried on as a job
-  # (origin sync_overflow) is not one of them: the key's limits on fetches
-  # hold it.
+  # Jobs one key may have open (queued, running or paused) at once, at
+  # least 1; one more is refused with 429 jobs_limited. A fetch carried on
+  # as a job (origin sync_overflow) is not one of them.
   max_open_per_key: 20
+  # Fetches carried on as jobs (origin sync_overflow) one key may have open
+  # at once, at least 1; while it has as many, its next POST /v1/fetch is
+  # refused with 429 jobs_limited when it is accepted. Counted then, so the
+  # key's fetches still within sync_wall_time may add up to max_concurrent
+  # - 1 more (23 with the defaults).
+  max_open_carried_per_key: 20
   # Items of its open jobs one key may have waiting at once, the new job's
   # included, a crawl's max_pages counted from its acceptance (at least
   # max_items); beyond it, 429 jobs_limited. null: twice max_items and at

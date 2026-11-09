@@ -1691,10 +1691,16 @@ async fn an_admin_purges_a_keys_data_and_retention_deletes_what_is_old() {
     )
     .await
     .problem(StatusCode::UNPROCESSABLE_ENTITY, "validation_failed");
-    // QA round four, api-04: before the earliest moment Postgres keeps is
-    // the caller's value out of range, not a failure inside Kage (`500`,
-    // "timestamp out of range" before); the earliest itself is taken.
-    for out_of_range in ["-4713-11-24T00:00:00Z", "-262143-01-01T00:00:00Z"] {
+    // QA round four, api-04: before the earliest the store can compare, a
+    // day after Postgres's earliest moment (the purge also looks a day
+    // before `before`), is the caller's value out of range, not a failure
+    // inside Kage (`500`, "timestamp out of range" before); the earliest
+    // itself is taken.
+    for out_of_range in [
+        "-4713-11-24T23:59:59Z",
+        "-4713-11-24T00:00:00Z",
+        "-262143-01-01T00:00:00Z",
+    ] {
         let refused = api
             .post(
                 &admin,
@@ -1709,7 +1715,7 @@ async fn an_admin_purges_a_keys_data_and_retention_deletes_what_is_old() {
         .post(
             &admin,
             "/v1/admin/purge",
-            &json!({ "key_id": mine.to_string(), "before": "-4712-11-24T00:00:00Z" }),
+            &json!({ "key_id": mine.to_string(), "before": "-4713-11-25T00:00:00Z" }),
         )
         .await;
     assert_eq!(earliest.status, StatusCode::OK, "{:?}", earliest.json());
@@ -2404,6 +2410,95 @@ async fn a_fetch_carried_on_as_a_job_is_no_job_of_the_keys_bound() {
         .await
         .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
     assert_eq!(refused["open_jobs"], json!(1), "{refused}");
+    api.shut_down().await;
+}
+
+/// The owner's decision on QA round four's api-05 (L2): a key may have
+/// `jobs.max_open_carried_per_key` fetches carried on as jobs open; its
+/// next fetch is refused `429 jobs_limited` when it is accepted, saying
+/// what was counted, with `Retry-After`, and nothing of it is stored. A
+/// carried fetch whose item waits is neither an open job of
+/// `jobs.max_open_per_key` nor a waiting item of
+/// `jobs.max_queued_items_per_key`; once it ended, the key may fetch again.
+#[tokio::test]
+async fn a_key_may_have_so_many_fetches_carried_on_as_jobs_open() {
+    let mut api = Api::start_with(2, 149, FAST, |config| {
+        quick(config);
+        config.scheduler.sync_wall_time = HumanDuration::new(Duration::from_millis(300));
+        config.jobs.max_open_per_key = 1;
+        config.jobs.max_open_carried_per_key = 1;
+    })
+    .await;
+    pages(&api, "/held", page("Held")).await;
+    let token = api.key(&[Scope::Fetch, Scope::Jobs]).await;
+    // A page the response cache holds, read while the site is served.
+    let cached = json!({ "url": Api::url("/held/9"), "level": 1, "cache_ttl_s": 600 });
+    let filled = api.post(&token, "/v1/fetch", &cached).await;
+    assert_eq!(filled.status, StatusCode::OK, "{:?}", filled.json());
+    // Every persona cools on the site for an hour: a fetch of it is
+    // carried on at the wall time, and its job waits with its item queued.
+    for persona in &api.lab.personas {
+        sqlx::query(
+            "INSERT INTO persona_domain_state (persona_id, domain, cooldown_until) \
+             VALUES ($1, $2, now() + interval '1 hour') \
+             ON CONFLICT (persona_id, domain) DO UPDATE SET cooldown_until = EXCLUDED.cooldown_until",
+        )
+        .bind(persona.id.as_uuid())
+        .bind(SITE)
+        .execute(api.lab.store().pool())
+        .await
+        .unwrap();
+    }
+    let work = api.work();
+    let fetch = |path: &str| json!({ "url": Api::url(path), "level": 1 });
+
+    let carried = api.post(&token, "/v1/fetch", &fetch("/held/1")).await;
+    assert_eq!(carried.status, StatusCode::ACCEPTED, "{:?}", carried.json());
+    let job = carried.json()["job_id"].as_str().unwrap().to_owned();
+    let paused = api
+        .job_until(&token, &job, |job| job["state"] == "paused")
+        .await;
+    assert_eq!(paused["origin"], "sync_overflow", "{paused}");
+    let requests = count(&api, "requests").await;
+
+    // One open: the next fetch is refused before anything of it is kept.
+    let refused = api.post(&token, "/v1/fetch", &fetch("/held/2")).await;
+    assert_eq!(refused.header("retry-after"), Some("60"));
+    let refused = refused.problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(refused["open_carried"], json!(1), "{refused}");
+    assert_eq!(refused["max_open_carried"], json!(1), "{refused}");
+    assert_eq!(count(&api, "requests").await, requests);
+    // A page the cache holds is never carried, and is answered at the cap.
+    let hit = api.post(&token, "/v1/fetch", &cached).await;
+    assert_eq!(hit.status, StatusCode::OK, "{:?}", hit.json());
+    assert_eq!(hit.json()["cached"], true, "{:?}", hit.json());
+
+    // Its waiting item is no waiting item of the key's jobs, and it is no
+    // open job: the key's one job is accepted, and the next refused for
+    // that one alone.
+    let batch =
+        json!({ "type": "batch", "urls": urls("/held/batch", 1), "defaults": { "level": 3 } });
+    let first = api.post(&token, "/v1/jobs", &batch).await;
+    assert_eq!(first.status, StatusCode::CREATED, "{:?}", first.json());
+    let refused = api
+        .post(&token, "/v1/jobs", &batch)
+        .await
+        .problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(refused["open_jobs"], json!(1), "{refused}");
+    assert_eq!(refused["queued_items"], json!(1), "{refused}");
+
+    // Once the carried fetch ended, the key may fetch again.
+    api.call(
+        Method::POST,
+        &format!("/v1/jobs/{job}/cancel"),
+        Some(&token),
+        None,
+    )
+    .await;
+    api.job_until(&token, &job, ended).await;
+    let again = api.post(&token, "/v1/fetch", &fetch("/held/3")).await;
+    assert_eq!(again.status, StatusCode::ACCEPTED, "{:?}", again.json());
+    work.stop().await;
     api.shut_down().await;
 }
 

@@ -87,10 +87,11 @@ error_codes! {
     RateLimited => ("rate_limited", TOO_MANY_REQUESTS, "Too many requests"),
     /// The key has as many requests in flight as it may have.
     ConcurrencyLimited => ("concurrency_limited", TOO_MANY_REQUESTS, "Too many requests in flight for this key"),
-    /// The key has as many open jobs, or as many items of them waiting, as
-    /// it may have (`jobs.max_open_per_key`, `jobs.max_queued_items_per_key`;
-    /// the security review's L2).
-    JobsLimited => ("jobs_limited", TOO_MANY_REQUESTS, "The key has as many open jobs or waiting items as it may have"),
+    /// The key has as many open jobs, as many items of them waiting, or as
+    /// many fetches carried on as jobs open, as it may have
+    /// (`jobs.max_open_per_key`, `jobs.max_queued_items_per_key`,
+    /// `jobs.max_open_carried_per_key`; the security review's L2).
+    JobsLimited => ("jobs_limited", TOO_MANY_REQUESTS, "The key has as many open jobs, waiting items or carried fetches as it may have"),
     /// The key's daily page budget is used up.
     BudgetExhausted => ("budget_exhausted", TOO_MANY_REQUESTS, "The key's daily page budget is used up"),
     /// The body is not the JSON the endpoint takes.

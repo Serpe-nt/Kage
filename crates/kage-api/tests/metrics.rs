@@ -65,8 +65,10 @@ async fn metrics_expose_the_series_of_the_specification() {
             kind: SelftestPageKind::Probe,
             url: "http://shop.kage.test/probe/".to_owned(),
         }];
-        // One open job per key (L2), and room for 300 domains (L3).
+        // One open job and one open carried fetch per key (L2), and room
+        // for 300 domains (L3).
         config.jobs.max_open_per_key = 1;
+        config.jobs.max_open_carried_per_key = 1;
         config.server.metrics_max_domains = 300;
     })
     .await;
@@ -756,6 +758,33 @@ async fn metrics_expose_the_series_of_the_specification() {
     )
     .await;
     limited.problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    // And a key with as many fetches carried on as jobs open as it may have
+    // is refused its next fetch, counted the same (QA round four, api-05).
+    let carrier = api.key(&[Scope::Fetch]).await;
+    let pool = api.lab.store().pool().clone();
+    let carrier_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM api_keys ORDER BY id DESC LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO jobs (id, api_key_id, kind, state, spec, origin, created_at) \
+         VALUES ($1, $2, 'batch', 'paused', '{}', 'sync_overflow', now())",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(carrier_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let answer = send(
+        Method::POST,
+        "/v1/fetch",
+        Some(&carrier),
+        Some(json!({ "url": Api::url("/page?carried=1"), "level": 1 })),
+    )
+    .await;
+    let problem = answer.problem(StatusCode::TOO_MANY_REQUESTS, "jobs_limited");
+    assert_eq!(problem["open_carried"], json!(1), "{problem}");
 
     // L3: the `domain` label's values are bounded. Six hundred hosts asked
     // for (past `server.metrics_max_domains`, 300 here, with the test's own
@@ -797,6 +826,7 @@ async fn metrics_expose_the_series_of_the_specification() {
         .lines()
         .find_map(|line| line.strip_prefix("kage_api_refusals_total{code=\"jobs_limited\"} "))
         .and_then(|value| value.trim().parse::<f64>().ok());
-    assert_eq!(jobs_limited, Some(1.0), "{text}");
+    // One job refused by `POST /v1/jobs`, one fetch by `POST /v1/fetch`.
+    assert_eq!(jobs_limited, Some(2.0), "{text}");
     api.shut_down().await;
 }
