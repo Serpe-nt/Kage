@@ -1874,7 +1874,13 @@ a `back` or a script that sent the tab to another site that never
 answered while the tab still showed the page before it: the sidecar
 names that address (`unanswered_url` of the page result, contract
 1.9.0), and the timeout is booked to its site, not to the shown page's
-(QA round three, flows-04). A fetch redirected to
+(QA round three, flows-04). Behind a redirect, after a `goto` or a
+click, that address is the redirect's last hop, the one that never
+answered: neither the shown page's site nor a site that only redirected
+is booked the timeout (QA round four, sched-01). Only a navigation that
+found no answer (a timeout, no server answering) is booked there: a
+shown page that answered with a server error itself is its own site's,
+wherever it sent the tab after. A fetch redirected to
 another site's wall is booked the same way, to the site that showed it
 (F187). A later site's trial the
 flow took ends with the attempt whatever site the flow ended on: a flow

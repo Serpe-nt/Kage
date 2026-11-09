@@ -571,9 +571,18 @@ const routes = {
     setTimeout(() => html(res, page('Slow', '<h1>Slow</h1>')), Number(url.searchParams.get('ms') ?? '1000'));
   },
   // A link to a page that answers after 15 s: a click on it sends the
-  // tab where nothing answers in time (QA round three, flows-04).
-  '/onward': (_req, res) =>
-    html(res, page('Onward', '<p><a id="onward" href="/slow?ms=15000">Onward</a></p>')),
+  // tab where nothing answers in time (QA round three, flows-04). With
+  // `via=redirect` the link goes there by two redirects, and with
+  // `status` the page itself answers with that status (QA round four,
+  // sched-01).
+  '/onward': (_req, res, url) => {
+    const slow = '/slow?ms=15000';
+    const href =
+      url.searchParams.get('via') === 'redirect'
+        ? `/guard/redirect?to=${encodeURIComponent(`/guard/redirect?to=${encodeURIComponent(slow)}`)}`
+        : slow;
+    html(res, page('Onward', `<p><a id="onward" href="${attribute(href)}">Onward</a></p>`), {}, Number(url.searchParams.get('status') ?? '200'));
+  },
   '/late': (_req, res) =>
     html(res, page('Late', '<h1>Late</h1><script>setTimeout(() => { const p = document.createElement("p"); p.id = "late"; p.textContent = "here"; document.body.appendChild(p); }, 700);</script>')),
   '/events.html': (_req, res) => html(res, EVENTS_PAGE),

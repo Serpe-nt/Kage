@@ -1570,6 +1570,158 @@ async fn a_later_site_a_click_led_to_is_booked_its_own_timeouts() {
     world.shut_down().await;
 }
 
+/// A flow whose `goto` asked a site that redirected at once to `pay.example`
+/// (QA round four, sched-01).
+fn redirected_across() -> FetchOrder {
+    let goto = |url: &str| kage_browser::contract::FlowAction::Goto {
+        human: None,
+        timeout_ms: Some(8000),
+        url: url.to_owned(),
+    };
+    FetchOrder {
+        level: Level::Human,
+        max_retries: Some(0),
+        flow: Some(kage_scheduler::FlowPlan {
+            actions: vec![
+                goto("https://shop.example/start"),
+                goto("https://hop.example/r"),
+            ],
+            typos: false,
+        }),
+        ..get("https://shop.example/start")
+    }
+}
+
+/// A flow whose `goto` was redirected to its later site, which never
+/// answered: the tab still shows the shop's page with its 200, and the
+/// browser names the redirect's last hop as the address that did not
+/// answer.
+fn redirect_to_a_later_site_timed_out() -> AttemptOutput {
+    let mut output = page_with(
+        "https://shop.example/start",
+        &serde_json::json!({ "unanswered_url": "https://pay.example/checkout" }),
+    );
+    let failed = timed_out();
+    output.classification = failed.classification;
+    output.courtesy = failed.courtesy;
+    output.reason = failed.reason;
+    let step = |index: u32, ok: bool| kage_scheduler::FlowStep {
+        index,
+        action: "goto".to_owned(),
+        ok,
+        duration_ms: 1000,
+        paced_ms: None,
+        error: (!ok).then(|| "timeout: page.goto: Timeout 8000ms exceeded.".to_owned()),
+        capture: None,
+        opened_tabs: Vec::new(),
+    };
+    output.flow = Some(kage_scheduler::FlowRun {
+        steps: vec![step(0, true), step(1, false)],
+        ok: false,
+    });
+    output
+}
+
+/// When `site`'s next page went after `since`, fetched on its own.
+async fn next_page_waited(
+    world: &mut World,
+    site: &str,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Span {
+    let report = world
+        .pipeline
+        .fetch(browser(&format!("https://{site}/page")))
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Ok, "{site}");
+    world.script.seen().last().unwrap().at - since
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_later_site_a_redirect_led_to_is_booked_its_own_timeouts() {
+    // QA round four, sched-01: a `goto` answered at once with a redirect to
+    // the later site, which never answered. The tab still showed the
+    // shop's page with its 200, so the timeouts were booked to the shop.
+    // They are the last hop's: neither the shop nor the site that only
+    // redirected is paused for them.
+    let mut world = World::with(4, false, DEFAULT_DOMAINS, &[]);
+    for _ in 0..3 {
+        world.script.then(redirect_to_a_later_site_timed_out());
+        let report = world.pipeline.fetch(redirected_across()).await.unwrap();
+        assert_eq!(report.outcome, Outcome::Timeout, "{:?}", report.reason);
+    }
+    let paused_at = world.now();
+    for site in ["shop.example", "hop.example"] {
+        let waited = next_page_waited(&mut world, site, paused_at).await;
+        assert!(waited < Span::seconds(30), "{site} waited {waited}");
+    }
+    let waited = next_page_waited(&mut world, "pay.example", paused_at).await;
+    assert!(
+        waited >= Span::seconds(29),
+        "the later site waited {waited}"
+    );
+    world.shut_down().await;
+}
+
+/// A flow that ended on the later site's page, which answered with a
+/// server error and sent the tab on to a third site that had not answered
+/// by the capture.
+fn later_site_erred_and_sent_on() -> AttemptOutput {
+    let mut output = page_with(
+        "https://pay.example/checkout",
+        &serde_json::json!({ "status": 503, "unanswered_url": "https://silent.example/next" }),
+    );
+    let failed = server_error(503);
+    output.classification = failed.classification;
+    output.courtesy = failed.courtesy;
+    output.reason = failed.reason;
+    let step = |index: u32| kage_scheduler::FlowStep {
+        index,
+        action: "goto".to_owned(),
+        ok: true,
+        duration_ms: 1000,
+        paced_ms: None,
+        error: None,
+        capture: None,
+        opened_tabs: Vec::new(),
+    };
+    output.flow = Some(kage_scheduler::FlowRun {
+        steps: vec![step(0), step(1)],
+        ok: true,
+    });
+    output
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shown_pages_own_server_error_is_its_site_wherever_it_sent_the_tab() {
+    // The edge of flows-04 and sched-01: the page the flow ended on answered
+    // with a 503 itself and sent the tab on to an address that had not
+    // answered yet. The server error is the page's own site's; the address
+    // it sent the tab to found no failure of its own and is not paused.
+    let mut world = World::with(4, false, DEFAULT_DOMAINS, &[]);
+    for _ in 0..3 {
+        world.script.then(later_site_erred_and_sent_on());
+        let report = world.pipeline.fetch(across()).await.unwrap();
+        assert_eq!(
+            report.outcome,
+            Outcome::ProviderError,
+            "{:?}",
+            report.reason
+        );
+    }
+    let paused_at = world.now();
+    for site in ["shop.example", "silent.example"] {
+        let waited = next_page_waited(&mut world, site, paused_at).await;
+        assert!(waited < Span::seconds(30), "{site} waited {waited}");
+    }
+    let waited = next_page_waited(&mut world, "pay.example", paused_at).await;
+    assert!(
+        waited >= Span::seconds(29),
+        "the erring site waited {waited}"
+    );
+    world.shut_down().await;
+}
+
 /// QA round three, flows-01 and lock-01: an attempt whose persona's context
 /// ran another operation in its sidecar for as long as it waited asked the
 /// site nothing. It spends no retry (the request has none here), it is no

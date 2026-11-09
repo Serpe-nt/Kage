@@ -553,7 +553,15 @@ version's date is the day, in UTC, its tag was made.
   unreachable for `robots.error_ttl`. The forwarder logs it at `info`
   with the proxy and the target. Another answer to a `CONNECT` that is
   neither a success, a `4xx` nor a `5xx` stays the proxy's failure.
-
+- **A later site a redirect led to is booked its own timeouts (QA round
+  four, sched-01).** A flow's `goto` answered with a redirect to a site
+  that never answered ended with the first site's page and its 200, and
+  the first site was paused for the timeout while the silent site went
+  on being asked; through a click, the site that only redirected was
+  paused. The sidecar now names the redirect's last hop as the address
+  that did not answer, after a `goto` or a click, and the timeout is
+  that site's. A shown page that answered with a server error itself is
+  booked its own error, wherever it sent the tab after.
 ### Changed
 
 - **Durations are at most ten years (QA round three api-08).** A duration
